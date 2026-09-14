@@ -1,7 +1,7 @@
 use crate::{
     api, config,
     model::{self, Node, ProxyGroup, RuleBinding, RuleResource, Settings, Store, Subscription},
-    ruleset, subscription,
+    native, ruleset, subscription,
     system_proxy::{helper as proxy_helper, ProxyStatus},
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -25,6 +25,20 @@ pub const CORE_VERSION: &str = "1.14.0";
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "action", content = "data", rename_all = "snake_case")]
 pub enum Action {
+    ReviewMigration,
+    AdoptNative {
+        revision: String,
+    },
+    ReadNative(String),
+    WriteNative(native::Edit),
+    ReviewApply,
+    ApplyNative {
+        revision: String,
+    },
+    SelectNative {
+        group: String,
+        member: String,
+    },
     Snapshot,
     Connections,
     CloseConnection(String),
@@ -126,6 +140,8 @@ pub struct Snapshot {
     pub core: String,
     pub version: String,
     pub running_settings: Option<Settings>,
+    #[serde(default)]
+    pub running_tun: bool,
     pub dirty: bool,
     pub status: api::Status,
     pub groups: api::Groups,
@@ -135,6 +151,10 @@ pub struct Snapshot {
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Reply {
+    #[serde(default)]
+    pub edit: Option<native::Edit>,
+    #[serde(default)]
+    pub confirm: Option<Action>,
     #[serde(default)]
     pub connections: Option<ConnectionReport>,
     #[serde(default)]
@@ -153,6 +173,8 @@ pub struct Reply {
 impl Reply {
     fn success(message: impl Into<String>) -> Self {
         Self {
+            edit: None,
+            confirm: None,
             connections: None,
             rules_preview: None,
             auth_kind: String::new(),
@@ -338,6 +360,7 @@ impl Manager {
             .as_ref()
             .map(|r| {
                 r.settings != self.store.settings
+                    || r.native != self.store.native
                     || r.selected != self.store.selected
                     || r.proxy_groups != self.store.proxy_groups
                     || r.rule_bindings != self.store.rule_bindings
@@ -365,8 +388,9 @@ impl Manager {
         for n in &mut store.nodes {
             n.outbound = config::redacted(&n.outbound);
         }
+        store.native = store.native.as_ref().map(config::redacted);
         Snapshot {
-            manager_protocol: 5,
+            manager_protocol: 6,
             system_proxy,
             connectivity: if connected {
                 self.connectivity.clone()
@@ -382,6 +406,7 @@ impl Manager {
                 .unwrap_or_default(),
             version: self.version.clone(),
             running_settings: self.running.as_ref().map(|s| s.settings.clone()),
+            running_tun: connected && self.running.as_ref().is_some_and(native::uses_tun),
             dirty,
             status: self.status.clone(),
             groups: self.groups.clone(),
@@ -472,7 +497,10 @@ impl Manager {
         r.preview = Some(p);
         Ok(r)
     }
-    fn save(&mut self, store: Store) -> Result<()> {
+    fn save(&mut self, mut store: Store) -> Result<()> {
+        if store.native == self.store.native {
+            native::reconcile(&self.store, &mut store)?;
+        }
         store.save(&self.dir)?;
         self.store = store;
         Ok(())
@@ -491,7 +519,8 @@ impl Manager {
             "Paste a rule subscription URL / local file / rule text"
         );
         ensure!(
-            config::target_exists(&self.store, &target, true),
+            (existing.is_some() && self.store.native.is_some())
+                || config::target_exists(&self.store, &target, true),
             "Choose an existing target group"
         );
         let text = match subscription::fetch(&source, "sing/0.3 rules", None).await {
@@ -506,6 +535,7 @@ impl Manager {
             Err(e) => return Err(e),
         };
         let parsed = ruleset::parse(&text, &format)?;
+        let existing_native_refresh = existing.is_some() && self.store.native.is_some();
         let id = existing.unwrap_or_else(|| model::id(&format!("rules:{source}")));
         let old = self.store.rule_resources.iter().find(|r| r.id == id);
         let old_rules: std::collections::HashSet<_> =
@@ -549,7 +579,11 @@ impl Manager {
             count: parsed.rules.len(),
             added,
             removed,
-            target: binding.target.clone(),
+            target: if existing_native_refresh {
+                "Existing native routing is preserved".into()
+            } else {
+                binding.target.clone()
+            },
             warnings: parsed.warnings,
             policies: parsed.policies,
             sample: parsed
@@ -563,8 +597,7 @@ impl Manager {
         Ok(reply)
     }
     async fn check_store(&self, store: &Store) -> Result<PathBuf> {
-        let core = self
-            .core()
+        let core = find_core(&self.dir, &store.settings.core)
             .context("Core missing. Press i on Overview to install sing-box.")?;
         let version = core_version(&core).await?;
         ensure!(
@@ -627,7 +660,11 @@ impl Manager {
     async fn start(&mut self, core: &Path, store: &Store) -> Result<()> {
         self.connectivity = ProbeStatus::default();
         let log_offset = fs::metadata(self.dir.join("core.log")).map_or(0, |m| m.len());
-        for port in [store.settings.port, store.settings.api_port] {
+        for port in if store.native.is_some() {
+            vec![store.settings.api_port]
+        } else {
+            vec![store.settings.port, store.settings.api_port]
+        } {
             std::net::TcpListener::bind(("127.0.0.1", port))
                 .with_context(|| format!("Port {port} is already in use. Change it in Config."))?;
         }
@@ -635,7 +672,7 @@ impl Manager {
             &self.dir.join("runtime.json"),
             &serde_json::to_vec_pretty(&config::generate(store)?)?,
         )?;
-        if store.settings.mode == "tun" {
+        if native::uses_tun(store) {
             ensure!(
                 helper_request(&self.dir, "start")? == "running",
                 "TUN helper failed to start"
@@ -690,7 +727,7 @@ impl Manager {
             r.after_auth = Some(Action::Connect);
             return Ok(r);
         }
-        if self.store.settings.mode == "tun" && helper_request(&self.dir, "status").is_err() {
+        if native::uses_tun(&self.store) && helper_request(&self.dir, "status").is_err() {
             let mut r = Reply::success("TUN requires administrator authorization on this host");
             r.needs_auth = true;
             return Ok(r);
@@ -730,7 +767,135 @@ impl Manager {
         }
     }
     async fn handle(&mut self, action: Action) -> Result<Reply> {
+        if self.store.native.is_some() {
+            ensure!(
+                !matches!(
+                    action,
+                    Action::SaveGroup(_)
+                        | Action::DeleteGroup(_)
+                        | Action::SelectGroup { .. }
+                        | Action::Select(_)
+                        | Action::SaveBinding(_)
+                        | Action::DeleteBinding(_)
+                        | Action::MoveBinding { .. }
+                ),
+                "Use native Outbounds / Routing editors after migration"
+            );
+        }
         match action {
+            Action::ReviewMigration => {
+                ensure!(
+                    self.store.native.is_none(),
+                    "Already using native configuration"
+                );
+                let doc = native::migration(&self.store)?;
+                let mut r = Reply::success("Review native configuration upgrade");
+                r.config = Some(format!("Create a private pre-native-state.json backup, then adopt this native draft. No core restart or network changes. Existing DNS and rules are materialized once. Future edits are independent.\n\n{}", serde_json::to_string_pretty(&config::redacted(&doc))?));
+                r.confirm = Some(Action::AdoptNative {
+                    revision: native::revision(&self.store),
+                });
+                Ok(r)
+            }
+            Action::AdoptNative { revision } => {
+                ensure!(
+                    self.store.native.is_none() && revision == native::revision(&self.store),
+                    "State changed; review upgrade again"
+                );
+                let doc = native::migration(&self.store)?;
+                let backup = self.dir.join("pre-native-state.json");
+                if !backup.exists() {
+                    model::atomic_write(&backup, &serde_json::to_vec_pretty(&self.store)?)?;
+                }
+                let mut s = self.store.clone();
+                native::adopt(&mut s, doc)?;
+                self.save(s)?;
+                Ok(Reply::success(
+                    "Native draft adopted. Original state backed up; running core unchanged.",
+                ))
+            }
+            Action::ReadNative(pointer) => {
+                let mut r = Reply::success("Edit native draft");
+                r.edit = Some(native::read(&self.store, pointer)?);
+                Ok(r)
+            }
+            Action::WriteNative(edit) => {
+                let mut s = self.store.clone();
+                native::write(&mut s, edit)?;
+                self.save(s)?;
+                Ok(Reply::success("Draft saved. Review & Apply when ready."))
+            }
+            Action::ReviewApply => {
+                let mut r = Reply::success("Review & Apply");
+                let connected = self.connected();
+                r.config = Some(native::review(
+                    &self.store,
+                    self.running.as_ref().filter(|_| connected),
+                )?);
+                r.confirm = Some(Action::ApplyNative {
+                    revision: native::revision(&self.store),
+                });
+                Ok(r)
+            }
+            Action::ApplyNative { revision } => {
+                ensure!(
+                    revision == native::revision(&self.store),
+                    "Draft changed; review again before applying"
+                );
+                self.connect().await
+            }
+            Action::SelectNative { group, member } => {
+                let mut s = self.store.clone();
+                let doc = s
+                    .native
+                    .as_mut()
+                    .context("Native configuration not initialized")?;
+                let g = doc["outbounds"]
+                    .as_array_mut()
+                    .context("Missing outbounds")?
+                    .iter_mut()
+                    .find(|v| native::tag(v) == group)
+                    .context("Group not found")?;
+                ensure!(
+                    g["type"] == "selector"
+                        && native::array(g, "/outbounds").iter().any(|v| v == &member),
+                    "Not a selectable member"
+                );
+                if self.connected() {
+                    let loaded = self
+                        .running
+                        .as_ref()
+                        .and_then(|s| s.native.as_ref())
+                        .context("Apply native draft first")?;
+                    let live = native::array(loaded, "/outbounds")
+                        .iter()
+                        .find(|v| native::tag(v) == group)
+                        .context("Apply the new group first")?;
+                    ensure!(
+                        live["type"] == "selector"
+                            && native::array(live, "/outbounds")
+                                .iter()
+                                .any(|v| v == &member),
+                        "Apply new group members first"
+                    );
+                    self.api()
+                        .await?
+                        .select_group(group.clone(), member.clone())
+                        .await?;
+                    if let Some(doc) = self.running.as_mut().and_then(|s| s.native.as_mut()) {
+                        if let Some(g) = doc["outbounds"]
+                            .as_array_mut()
+                            .unwrap()
+                            .iter_mut()
+                            .find(|v| native::tag(v) == group)
+                        {
+                            g["default"] = serde_json::json!(member);
+                        }
+                    }
+                }
+                g["default"] = serde_json::json!(member);
+                self.save(s)?;
+                Ok(Reply::success("Group selection saved"))
+            }
             Action::Connections => {
                 let mut items = if self.connected() {
                     self.api().await?.connections().await?
@@ -918,7 +1083,9 @@ impl Manager {
                 if !store.rule_bindings.iter().any(|b| b.id == binding.id) {
                     store.rule_bindings.push(binding);
                 }
-                config::validate_references(&store)?;
+                if store.native.is_none() {
+                    config::validate_references(&store)?;
+                }
                 self.save(store)?;
                 self.pending_rules = None;
                 Ok(Reply::success(
@@ -1169,16 +1336,46 @@ impl Manager {
                 }))
             }
             Action::SaveSettings(settings) => {
-                config::validate(&settings)?;
+                if self.store.native.is_none() {
+                    config::validate(&settings)?;
+                } else {
+                    ensure!(
+                        ["port", "system"].contains(&settings.mode.as_str()),
+                        "System integration must be port (off) or system; edit TUN under Inbounds"
+                    );
+                    ensure!(
+                        ["rule", "global", "direct"].contains(&settings.route_mode.as_str()),
+                        "Invalid routing override"
+                    );
+                    ensure!(
+                        settings.api_port >= 1024
+                            && settings.port >= 1024
+                            && settings.api_port != settings.port,
+                        "Proxy and API ports must be different and at least 1024"
+                    );
+                }
                 if settings.core != self.store.settings.core && !self.connected() {
                     self.version.clear();
                 }
                 let mut s = self.store.clone();
+                if settings.api_port != s.settings.api_port {
+                    if let Some(doc) = s.native.as_mut() {
+                        let api = doc["services"]
+                            .as_array_mut()
+                            .context("Missing services")?
+                            .iter_mut()
+                            .find(|v| native::tag(v) == "management")
+                            .context("Missing management service")?;
+                        api["listen_port"] = serde_json::json!(settings.api_port);
+                    }
+                }
                 s.settings = settings;
-                config::validate_references(&s)?;
+                if s.native.is_none() {
+                    config::validate_references(&s)?;
+                }
                 self.save(s)?;
                 Ok(Reply::success(
-                    "Settings saved. Press c to apply network changes.",
+                    "Settings saved. Review & Apply to activate changes.",
                 ))
             }
             Action::Preview => {
@@ -1203,6 +1400,26 @@ impl Manager {
                 Ok(Reply::success("Disconnected"))
             }
             Action::Test(id) => {
+                if self.store.native.is_some() {
+                    let running = self
+                        .running
+                        .as_ref()
+                        .context("Start the core before testing")?;
+                    let doc = running
+                        .native
+                        .as_ref()
+                        .context("Apply the native draft first")?;
+                    ensure!(
+                        native::array(doc, "/outbounds")
+                            .iter()
+                            .any(|v| native::tag(v) == id),
+                        "Apply this outbound first"
+                    );
+                    self.api().await?.test(id).await?;
+                    return Ok(Reply::success(
+                        "Latency test requested; results appear beside outbounds",
+                    ));
+                }
                 ensure!(self.running.as_ref().is_none_or(|s| s.settings.route_mode != "direct"),
                     "Direct mode does not load proxy nodes. Apply rule/global mode before testing nodes.");
                 let tag = if id.is_empty() {
@@ -1248,6 +1465,8 @@ impl Manager {
                 s.proxy_groups = previous.proxy_groups;
                 s.rule_resources = previous.rule_resources;
                 s.rule_bindings = previous.rule_bindings;
+                s.native = previous.native;
+                s.schema = previous.schema;
                 self.save(s)?;
                 self.connect().await
             }
@@ -1481,6 +1700,49 @@ fn redact_error(error: &str, store: &Store) -> String {
                     e = e.replace(s, "[redacted]");
                 }
             }
+        }
+    }
+    fn secrets(value: &serde_json::Value, masked: &serde_json::Value, found: &mut Vec<String>) {
+        if masked == "••••••" {
+            fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
+                match v {
+                    serde_json::Value::String(s) if !s.is_empty() => out.push(s.clone()),
+                    serde_json::Value::Array(a) => {
+                        for v in a {
+                            strings(v, out);
+                        }
+                    }
+                    serde_json::Value::Object(m) => {
+                        for v in m.values() {
+                            strings(v, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            strings(value, found);
+        } else {
+            match value {
+                serde_json::Value::Object(m) => {
+                    for (k, v) in m {
+                        secrets(v, &masked[k], found);
+                    }
+                }
+                serde_json::Value::Array(a) => {
+                    for (i, v) in a.iter().enumerate() {
+                        secrets(v, &masked[i], found);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(doc) = &store.native {
+        let mut found = vec![];
+        secrets(doc, &config::redacted(doc), &mut found);
+        found.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        for secret in found {
+            e = e.replace(&secret, "[redacted]");
         }
     }
     e = e.replace(&store.secret, "[redacted]");

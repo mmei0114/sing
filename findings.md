@@ -1,5 +1,15 @@
 # 设计依据
 
+## 0.5.0 实现结论（覆盖下文旧版描述）
+
+- 配置权威从旧 Settings/Rule 模板生成改为 Store.native；旧模型仅保留迁移与资源来源元数据。表单的原值直接取自私有文档，只提交实际修改字段，展示快照的脱敏占位符绝不回写配置。严格 JSON 保留语义，不保留注释/空白。
+- Rule/Global/Direct 是临时流量路由覆盖，不是内核配置的全部框架；保留 DNS 和所有拨号依赖，因此 Direct 不能承诺内部 DNS 完全不使用代理。这一影响在应用审阅中明确展示。
+- 原生管理 API 依赖受保护的 management 服务（本机回环地址、端口、secret、非 TLS）。其他 endpoints/services/TLS/transport 等字段可编辑并交由所选核心校验；没有声称所有原生能力已有专用表单。
+- DNS 直连是留空 detour；空 direct 出站作为 DNS detour 会触发内核启动问题，现可提前拦截。默认节点域名解析、DNS 服务器 bootstrap 与 DNS 查询路由为不同配置对象；跨出站/DNS 依赖检查可发现循环。
+- 节点导入在首个空默认 selector 中填入成员一次；以后已有组成员是显式配置，源节点移除后须修复引用。局部编辑与订阅更新冲突时失败保留草稿。原生远程规则和客户端转换规则分开更新；转换规则不隐式重建 DNS 或既有路由次序。
+- 校验依据为本地 sing-box 1.14.0 和固定版本文档：https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.0/docs/configuration/dns/server/https.md 、https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.0/docs/configuration/dns/server/udp.md 、https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.0/docs/configuration/service/api.md 。本地真实核心验证 local/UDP/TCP/TLS/HTTPS/QUIC/H3/FakeIP 配置；只验证格式及启动路径，不将配置校验当作外部 DNS 可达性或性能测量。
+- 新版仍有明确产品边界：实际 TUN 网络恢复与 Linux/SSH 验收未完成，进程条件可编辑但未提供 App 自动选择器，订阅调度/动态成员策略/完整原生配置导入向导/性能诊断/服务自启仍需后续。完整能力入口与专用易用工作流是两个不同完成度。
+
 ## 2026-09-15 架构反思：原生语义优先（待确认方案）
 
 - 用户新决定：后续只保留英文 UI，非必要常驻提示应减少；此项取代下文早期中英文双语偏好。要求先讨论整体方向，再 Git 备份，再升级。

@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod model;
+mod native;
 mod ruleset;
 mod runtime;
 mod subscription;

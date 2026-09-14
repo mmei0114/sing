@@ -216,6 +216,8 @@ impl Default for Settings {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Store {
     pub schema: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<Value>,
     pub secret: String,
     pub subscriptions: Vec<Subscription>,
     pub nodes: Vec<Node>,
@@ -234,6 +236,7 @@ impl Store {
     pub fn new() -> Result<Self> {
         Ok(Self {
             schema: 1,
+            native: None,
             secret: token()?,
             subscriptions: vec![],
             nodes: vec![],
@@ -252,7 +255,7 @@ impl Store {
         }
         let data: Self = serde_json::from_slice(&fs::read(file)?)
             .context("Cannot read saved state; original file was not changed")?;
-        if data.schema != 1 {
+        if ![1, 2].contains(&data.schema) {
             bail!("Unsupported state version {}", data.schema);
         }
         Ok(data)

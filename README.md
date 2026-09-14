@@ -1,239 +1,135 @@
 # sing
 
-一个 macOS / Linux 原生终端 sing-box 客户端。Rust + Ratatui；运行控制直接使用 sing-box 1.14+ 的官方 gRPC API，不运行 Clash，不使用在线订阅转换服务。
+A native terminal client for sing-box on macOS and Linux. Rust + Ratatui; runtime control uses the official sing-box 1.14+ gRPC service. No Clash core or online conversion service is required.
 
-当前是 **可试用的 0.4.1 版**，包含独立三种路由模式、分层设置、原生连接观察与单连接关闭、本地配置诊断；保留分组、远程分类规则和配套 DNS。不是设计文档中所有功能都已完成。用户已反馈 macOS 系统代理可用；自动化验证使用模拟系统代理助手，不修改主机设置。Linux / SSH / TUN 仍未完成完整真机验收。
+## 0.5.0 — native configuration workspace
 
-从 0.4.0 或更早版本升级：先关闭旧界面，执行 `./sing --shutdown` 停止旧后台，再重新 `./sing`。此操作会恢复托管的系统代理并停止旧连接，但不会删除订阅、节点或规则；若恢复失败会保留核心并报错，应先处理恢复。新界面检测管理协议 5，确保后台已包含 DNS 修复，不会悄悄重启旧后台。升级后不要再运行旧版本写入同一数据目录，以免旧程序丢弃新字段。
+The native JSON document is now authoritative. Forms edit individual subtrees of that same document; fields not edited by a form are preserved. Node subscriptions and converted rule-list metadata live outside that document. Resource refreshes update their owned objects, not the entire configuration.
 
-### 0.4.1 试用修复
+The UI is English-only; names in subscriptions and user-created objects retain their original language.
 
-- 修复 `rule + legacy DNS + direct 未匹配目标` 启动失败：直接发送 DoH 时不生成到空 direct 出口的 detour。保留 DoH 地址与旧策略，不擅自改为系统 DNS 或全局代理。之前静态校验可通过、实际启动才失败，已加入真实核心回归。
-- 启动失败显示本次启动的脱敏核心错误，不混入上次失败日志。
-- 主页不再显示含糊的 Proxy choice。全局模式显示“全局目标：组 → 当前节点”；规则模式显示“未匹配流量：目标”，其他命中流量仍使用各条规则的目标。运行节点来自原生接口，不拿尚未应用的选择代替。
-- `M` 选择目标组，`6` 的组内选择决定具体节点；内置默认代理组由 `2` 节点页控制。不是两个重复的代理开关。
-- `L` 切换语言；本轮设置、连接详情、确认和配置诊断分别显示中英文，不再双语并排。内部配置值和用户节点/组名称保持原样；核心原始日志不翻译。
+This is the first implementation of the new architecture, not a claim that every native field has a dedicated form or that all platforms have been validated. The selected core validates the configuration before application. Version 1.14.0 is the tested baseline; feature availability also depends on platform and core build.
 
-## 0.4：接管、路由、DNS 分开设置
+## Upgrade from 0.4.1
 
-主页按 `s`，选择 **1 接管 / 2 路由 / 3 DNS / 4 高级**。接管决定哪些流量进入核心；路由决定进入之后怎么走；DNS 决定核心收到的查询怎么解析。已有入站为本机 HTTP/SOCKS 混合端口，TUN 额外创建虚拟网卡入站，不需要手写 inbound。
+The local Git tag `v0.4.1-baseline` preserves the old source. The old macOS arm64 executable is separately preserved at `.build/backups/v0.4.1/sing` (excluded from Git).
 
-任何页面按大写 `M` 可直接打开路由模式：
+1. Close old sing interfaces with `q`.
+2. Run `./sing --shutdown`. This restores managed system proxy settings and stops the old core. If restoration fails, resolve that error before upgrading.
+3. Run `./sing` again. The new UI requires manager protocol **6**; it never silently restarts an old manager.
+4. On Overview, press `u` to review the native migration, then Enter to accept it. A private `pre-native-state.json` backup is created in the application data directory before schema 2 is saved. Migration alone does **not** start/restart a core or change host networking.
+5. Review your configuration and press `A` for **Review & Apply**. Enter confirms application; the core performs validation first.
 
-| 模式 | 实际行为 |
-| --- | --- |
-| `rule` 规则分流 | 使用保存的手工规则、规则订阅和未匹配目标 |
-| `global` 全部代理 | 忽略用户分流/阻断规则，使用所选全局代理组；默认保留内网 IP 直连例外，可明确关闭 |
-| `direct` 直连 | 忽略用户分流/阻断规则，不加载代理节点和自动测速组；不需要订阅也能启动 |
+The previous routing policy and DNS are materialized into editable native objects once. Subsequent routing/DNS edits are independent. A fresh empty configuration includes an empty default selector: import nodes before using that selector, or remove it and choose a valid direct-only configuration.
 
-`F2` 保存，`c` 应用。**更改模式需要重启核心，已有连接会中断**；模式由原生配置实现，不依赖 Clash API。退出表单不会自动连接。主页和 `D` 诊断区分保存状态与运行状态。旧配置默认保留 `rule` 和内网直连行为，不改变已有的未匹配目标。
+Do not open the schema-2 data directory with old versions. For a downgrade: stop the new manager, preserve the new data separately, and restore the private `pre-native-state.json` as `state.json` before launching the backed-up 0.4.1 executable. Do not copy active sockets or delete live runtime state. Git is a source backup, not a credential/data backup.
 
-全局/直连模式不会删除你的组和规则；切回 `rule` 即可重新应用。未在当前模式加载的组，选择节点只保存供下次使用；已加载的手动组仍可实时选择。Nodes 页只控制内置 `proxy`，不会替换自建组自己的选择。
-
-DNS 随模式覆盖：全局模式的普通核心 DNS 查询经全局代理组发送 DoH；直连模式使用系统解析器，避免 DNS 仍依赖代理。规则模式保留你选择的 `legacy` / `paired` 策略。`.local` 和节点域名引导解析仍使用系统解析器；这些行为不代表系统 DNS 已被接管。
-
-### 看清实际连接
-
-按 `8` 打开 **Connections**，在浏览器访问网站后：
-
-- `Enter` 查看核心实际返回的目标、入站、命中规则、出口链、累计流量和进程路径（可识别时）。缺失信息显示未知，不猜测规则命中。
-- `/` 搜索域名、目标、规则、出口或进程；`h` 显示最近关闭的记录，`r` 手动刷新。
-- `x` 确认后仅关闭选中的连接，不断开整个代理；应用可能自动重连。
-- 页面每约 2 秒采样，最多展示核心保留记录中的 500 条；标明采样时间、过期或刷新错误。短连接可能在采样前结束；这不是完整访问历史，也无法观察绕过核心的流量。连接详情不持久保存到客户端配置，截图仍可能暴露域名和进程路径。
-
-大写 `D` 打开 **本地配置诊断**，列出已保存/运行的接管、路由、DNS 出口和覆盖边界，不发起网络探测。它不测 DNS 耗时、丢包、UDP/QUIC 或带宽，不代表网页慢的问题已经解决。需要时可另按 `v`，确认后做一次 HTTPS 路径检查。
-
-## 新功能：分组 → 规则订阅 → 分流目标
-
-1. 按 `6` 打开 **Groups**，`a` 创建，例如 `YouTube`。`selector` 是手动选节点；`urltest` 按 HTTPS 延迟自动选择（不是下载速度或解锁能力）。自动组启用后会访问 gstatic，每 3 分钟测速。
-2. 填好名称和类型，`F2` / `Ctrl+S` 进入成员选择；空格勾选节点，`/` 搜索，再按 `F2` 保存。分组页 `Enter` 选择手动组当前节点，`m` 修改成员，`e` 改名称 / 类型。
-3. 按 `7` 打开 **Rules**，`a` 粘贴远程分类规则链接，格式通常保留 `auto`，目标选刚建的组。按 `F2` 查看转换预览。
-4. 预览会显示有效匹配、增删和不支持的条目。原文件的策略名称只作提示，**统一由你选择的目标替换**。`Enter` 接受可转换部分；`Esc` 取消，不改旧内容。
-5. 回到列表后，`Enter` 改目标，空格启停，`[` / `]` 调整优先级，`p` 看详情 / 警告，`r` 下载更新并预览，`x` 删除确认。
-6. 按 `4` → `s` 用实际核心校验；按 `c` 应用（会重启核心、可能中断现有连接）。新增 / 改成员的组先应用；已加载手动组的节点选择通过原生 gRPC 实时生效，已有连接可能继续使用旧节点。
-
-**规则模式顺序：内网 IP 直连（可关闭）→ Config 手工规则 → Rules 从上到下 → Rule fallback。** 首条命中的终止规则决定目标。`proxy` 使用 Nodes 页选中的节点，`direct` 是直连，`reject` 是阻断。未匹配目标可在路由表单中选择自建组；默认不内置“国内直连、国外代理”分类。
-
-组成员是明确勾选的节点，不自动按地区或订阅扩充。订阅更新导致节点消失时，Groups 会显示不可用成员，必须修复才能应用，**不悄悄改成直连**。被规则或默认目标引用的组不能删除。规则下载失败、HTML / 空内容 / 完全不支持时保留旧资源；保存本地转换结果后，核心运行不依赖在线规则网站。更新暂时只支持手动 `r`。
-
-### 分类规则兼容边界
-
-这不是完整配置文件转换器，也不需要运行 Clash：
-
-- QX / Clash 常见文本：精确域名、后缀、关键词、IP-CIDR / IP6-CIDR，以及独立进程名 / 路径。DOMAIN-REGEX 先做本地子集校验，最终以核心校验为准。
-- Clash `payload` YAML：上述 typed 规则，或域名 / CIDR 列表；`+.example.com` 表示包括根域的后缀。裸域名按精确匹配，含义模糊的通配符不擅自改写。
-- sing-box 原生 **JSON 源规则集的上述简单条件子集**。复合条件、逻辑规则和未知条件整条报告不支持，不删掉限制后扩大匹配。
-- 暂不转换 QX `USER-AGENT`、`HOST-WILDCARD`、`no-resolve` 选项、GEOIP / GEOSITE 依赖、二进制 SRS / MRS、完整 Clash / QX 配置。并非所有 `.list` / `.yaml` 都能无损导入。
-- 用户提供的 [YouTube QX 示例](https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/YouTube/YouTube.list) 含 USER-AGENT 和通配符条目，会有兼容性警告；接受子集不代表完整等价。公开链接直连测试在本次环境中下载失败，不计作在线导入验收。
-
-### DNS：可选择配套，不自动改你的旧设置
-
-Config → Enter → `3 DNS`（规则模式）：
-
-- `legacy`：保留 0.2 的行为，使用所填 DoH IP，经默认目标发送。旧存储自动保留此模式。
-- `paired`：**对于交给 sing-box DNS 模块的请求**，域名规则目标为直连时使用系统解析器，目标为组时 DoH 经该组，阻断域名生成 DNS 拒绝规则；未匹配项跟随默认目标。域名规则保持同样的先后顺序；IP / 进程条件不直接投影到 DNS，`.local` 优先使用系统解析器。新安装默认此模式。
-- `DNS address preference` 提供仅 IPv4（原默认）、优先 IPv4 / IPv6、仅 IPv6。首次排查建议保留 IPv4，不同时改变多个变量。
-
-这些设置**不修改系统 DNS，不保证覆盖浏览器自带 DoH、远端节点解析或应用自己发出的查询**。节点域名等引导解析仍使用系统解析器，避免循环依赖。这里的“配套”不是所有 DNS 都与实际连接路径严格相同的承诺，也不是零泄露承诺；不能据此断言已解决网页慢或视频卡。
-
-进程名 / 路径可在 Config → `r` 添加，或导入对应简单条件，但依赖流量确实进入核心、操作系统能识别进程；本版没有 App 选择器，也未完成 TUN 下的逐应用命中验收。
-
-## 启动与第一次导入
-
-在项目目录的正常终端中运行：
-
-```sh
-./sing
-```
-
-1. 在 Overview 按 `i`，确认安装官方 sing-box 1.14.0。它安装在应用私有目录，**不覆盖 Homebrew 或系统的 sing-box**。已有 1.14+ 核心时，也可以在 Config 指定完整路径。
-2. 按 `a`，直接粘贴你的订阅链接。无需先判断格式。名称与 User-Agent 可以留空。
-3. 按 `Ctrl+S`（或 `F2`），查看识别出的节点、增删数量和警告。`↑↓` 可以滚动完整警告列表；`Enter` 确认保存，`Esc` 取消。
-4. 按 `2` 到 Nodes，选择节点，按 `Enter`。
-5. 按 `c`，先校验配置，再启动核心。首次建议保留默认的 `port` 模式。
-
-**Port 模式不会自动改变系统代理。** 在需要代理的应用里设置 HTTP / SOCKS5 代理 `127.0.0.1:2080`，或在另一个终端中设置：
-
-```sh
-export http_proxy=http://127.0.0.1:2080
-export https_proxy=http://127.0.0.1:2080
-export all_proxy=socks5h://127.0.0.1:2080
-```
-
-这些环境变量只影响该终端之后启动、并遵循代理变量的程序。结束后可执行 `unset http_proxy https_proxy all_proxy`。
-
-`q` 仅退出界面，后台连接继续运行。再次运行 `./sing` 即可管理同一实例。
-
-```sh
-./sing --status       # 状态，订阅 token 和常见凭据已遮盖
-./sing --disconnect   # 先恢复托管的系统代理，再停止核心
-./sing --shutdown     # 恢复系统代理并停止托管核心、助手与后台管理器
-./sing --restore-system-proxy  # 恢复 macOS 原代理；必要时请求 sudo，不启动核心
-./sing --demo         # 离线示例，不保存数据、不发网络请求
-```
-
-## 让 macOS 浏览器使用代理
-
-无需再导入一次订阅，也无需 Clash：
-
-1. Overview 按 `s` 打开配置表单；在 `Capture mode` 按空格，将 `port` 改为 `system`。
-2. `Ctrl+S` / `F2` 保存，按 `c`，确认影响范围。首次需要管理员授权，`sudo` 在真实终端请求密码，sing 不读取密码。
-3. 核心和 gRPC 就绪后，才备份并设置当前网络位置中已启用的 Wi-Fi / Ethernet 类服务的 HTTP、HTTPS、SOCKS 代理。
-4. 顶部显示 `SYSTEM PROXY ON` 表示配置与 macOS 有效代理读数均指向 sing；`PROXY SET · ROUTING UNVERIFIED` 表示已配置但未确认生效。它们均不代表节点已通过外网访问测试。
-5. 按 `v`，确认后向 `https://www.gstatic.com/generate_204` 发出一次经过本地代理的 HTTPS 请求。只接受 HTTP 204，不跟随重定向；失败不会冒充“网络可用”。随后可自己打开浏览器验证目标网站。
-
-`d`：先恢复原代理，再停止核心。`R`：只恢复原代理，保留本地代理端口。`q`：只退出界面，代理和后台继续运行。保存 `port` 后仍需按 `c` 应用，才结束系统接管。
-
-这会让**遵循系统代理设置的应用**使用 sing；不等于所有流量接管。部分命令行工具、游戏、UDP 程序及使用独立代理设置的软件可能不遵循它。终端仍可使用上面的代理环境变量；全流量接管属于后续 TUN 验收范围。
-
-### 恢复与安全边界
-
-- 修改前先把完整原代理字典写入管理员私有恢复记录；保留类型、绕过列表及其他未知设置。启用期间暂时关闭 PAC / 自动发现，断开时恢复；检测到认证代理设置会拒绝自动接管，避免破坏凭据。
-- 恢复按 HTTP、HTTPS、SOCKS、PAC 等组比较，仅还原仍与 sing 写入一致的组，不覆盖其他软件或用户的新修改。
-- 不能确认安全恢复时，不主动停止仍在运行的核心；保留记录并提示 `R`。可用 `./sing --restore-system-proxy` 在没有 TUI / 管理器时恢复。无法读取服务时保守保留记录；已确认删除的服务不会被重建。
-- 独立助手监护：管理器心跳中断超过约 12 秒，或本地端口连续三次检查失败，会尝试恢复。助手存活是自动恢复的前提；它与核心同时被 `kill -9`、断电等情况不能执行即时清理，下次授权时先尝试恢复。**当前没有 launchd 守护，不能承诺所有异常下自动恢复。**
-- 一台机器一次只允许一个 sing 系统代理助手。不会启用 TUN、修改 DNS 服务器或路由；不自动接管新建的网络服务或新的网络位置，需要检查状态并重新应用。
-- 恢复记录位于 `/private/var/db/sing/system-proxy.json`（root 私有）；控制 socket 位于 root 拥有的 `/private/var/run/sing-proxy/`，只向请求用户开放。应用目录保留非敏感恢复标记和 socket 链接。不要在接管期间手动删除恢复记录或数据目录。
-- macOS 的 `system` 模式不允许经 SSH 启用；Linux 暂不自动修改 GNOME / KDE 桌面代理，继续使用 `port`。
-
-## 界面与配置辅助
-
-| 页面 | 常用操作 |
-| --- | --- |
-| Overview | `a` 添加订阅，`i` 安装核心，`s` 配置表单，`c` 连接 / 应用，`v` HTTPS 检查，`R` 恢复系统代理 |
-| Nodes | `Enter` 选择，`/` 搜索，`f` 收藏，`t` 测当前节点，`T` 测全部 |
-| Subscriptions | `a` 添加，`r` 下载更新并预览，`x` 删除确认 |
-| Config | `Enter` 编辑设置，`r` 添加规则，`x` 删除选中规则，`s` 校验，`p` 预览，`b` 恢复上一份已应用配置 |
-| Activity | 管理事件，`l` 查看核心诊断日志 |
-| Groups | `a` 新建，`m` 成员，`e` 编辑，`Enter` 选节点，`x` 删除确认 |
-| Rules | `a` 导入，`Enter` 目标，空格启停，`[` / `]` 调序，`r` 更新，`p` 详情 |
-| Connections | `Enter` 详情，`/` 搜索，`h` 最近关闭，`x` 关闭单条确认，`r` 刷新 |
-
-全局：`1–8` / `Tab` 换页，`M` 路由模式，`D` 本地诊断，`↑↓` / `j k` 移动，`?` 帮助，`L` 切换英文 / 中文导航与帮助，`d` 断开确认。表单中 `Tab` 换字段，`Space` 切换选项，`Ctrl+S` / `F2` 保存，`Esc` 取消。支持终端粘贴；鼠标支持标签点击和列表滚动。推荐 110×30，最小 54×18；窄终端只显示当前标签，仍可用数字 / Tab 切换全部页面。
-
-表单包含 `port` / `system`（macOS）/ `tun` 模式、默认路由、DoH 解析器 IP、DNS 模式和地址偏好、代理端口、gRPC 端口、核心路径及语言。手工规则支持完整域名、域名后缀 / 关键词 / 正则、IP CIDR、进程名 / 路径 → 代理 / 自建组 / 直连 / 拒绝。
-
-- 默认代理非私有地址；私有 IP 优先直连。**不内置自动国内外分流**。
-- 用户规则按顺序匹配，位于 DNS 劫持和私有 IP 直连之后。
-- 默认使用 `1.1.1.1` 的 DoH；节点域名使用系统解析器引导，避免代理启动循环依赖。这不是“零 DNS 泄露”的承诺。
-- 保存与应用分离；运行中的核心不会因为编辑字段立即改变。`c` 应用需要重启核心，现有连接可能中断。节点选择通过 gRPC 即时切换，默认不切断已建立连接。
-- 应用前执行真实 `sing-box check`；启动后检查 gRPC 就绪。启动失败时尝试恢复先前运行的配置；Activity 会记录恢复是否成功。
-- `check` 成功 / 核心启动成功不代表订阅节点一定可达。Nodes 的 `t` / `T` 测试用于延迟检查，`—` 表示未测得结果，并非 0ms。
-
-## 订阅兼容范围
-
-输入：HTTP(S) 订阅链接、`sub://` 包裹的 HTTP(S) 链接、分享链接列表、Base64 列表、含 `proxies` 的 Clash YAML、含 `outbounds` 的 sing-box JSON，以及本地文件路径。
-
-解析的常见协议：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS、SOCKS、HTTP。支持常见 TLS / REALITY、WebSocket、gRPC 等参数子集；具体配置最终仍需通过核心校验。**协议名支持不代表支持其所有扩展参数**。
-
-- 自动识别是客户端本地解析，不代表互联网上存在统一的“通用订阅标准”。
-- 不继承供应方的路由、DNS、入站或代理组，只导入节点。保留所有地区，去除同一订阅中的重复节点。
-- SS 插件、SSR、XHTTP、部分 Clash 扩展、依赖 detour 的节点链和订阅提供的本地文件引用等目前会拒绝并报告，不会暗中删掉关键参数。
-- 空内容、HTML 登录页、下载失败、没有可用节点时不覆盖旧节点；部分可用时需要用户在警告预览后确认。
-- 更新是手动 `r`，不会定时偷偷替换你的节点。
-- 供应方按客户端区分格式时，可在导入表单的 User-Agent 中填写它要求的值。
-- `fixtures/` 全是虚构节点，适合验证导入界面，不能用于真实代理。
-
-## macOS、Linux 与 SSH
-
-源码适用于 Unix 平台；自动核心安装支持 macOS / Linux 的 arm64 和 amd64。当前实际验证机器是 **macOS arm64**；Linux / SSH 尚未经过真机验收。
-
-SSH 中看到的主机名就是操作目标：远程 TUI 管理的是远端 sing-box，`127.0.0.1:2080` 也属于远端。客户端不开放远程管理端口，gRPC 仅监听 loopback，并使用随机 bearer secret。
-
-**TUN 是实验功能，尚未在当前机器启用验证。** Config 中改为 `tun` 后，`c` 会先提示路由风险，再让 `sudo` 在真实终端里请求密码。TUI 不读取密码；特权 helper 只用于固定实例的启动 / 停止。它会影响当前主机路由，可能导致 SSH 断开；首次试订阅请用 Port 模式。需要 `sudo`，Linux 也需可用的 `/dev/net/tun`。不要直接以 root 运行整个 TUI。
-
-后台管理器目前不是 launchd / systemd 的开机服务。重启电脑后需重新打开 TUI 并连接；TUN 需重新授权。正常 `--shutdown` 会清理托管进程；强制 `kill -9` 后的孤儿核心自动接管尚未实现。改核心路径前，请先断开并 `--shutdown`，避免复用旧的 TUN helper。
-
-## 隐私与文件
-
-默认数据目录：
-
-- macOS：`~/Library/Application Support/sing`
-- Linux：`${XDG_DATA_HOME:-$HOME/.local/share}/sing`
-- `--data-dir /absolute/private/path` 可选择独立实例，端口需要避免冲突。
-
-从旧名称升级时，如果已有 `sbtui` 数据目录且尚无 `sing` 目录，会自动继续使用旧目录，保留订阅、核心和运行中的管理器；不会复制凭据或重启连接。新安装使用 `sing` 目录。项目内入口是 `./sing`；如需在任意目录直接输入 `sing`，可自行将 `target/release/sing` 放入 PATH。
-
-目录权限 `0700`；状态、生成配置和日志通常为 `0600`。凭据保存在本机明文文件中，依赖操作系统账户和文件权限保护，**未使用 Keychain / 加密数据库**。不要把数据目录或原始日志发到公开仓库。UI 配置预览和状态输出遮盖常见密钥字段；核心原始日志仍应视为敏感信息。
-
-应用不会把订阅发到转换网站。下载仍会联系订阅供应商，核心安装联系官方 GitHub，连接 / 测速会联系节点和核心指定的测速目标。`v` 经确认后联系上面的 Google gstatic HTTPS 检查地址，不自动后台探测。归档下载逐个验证固定的官方 SHA-256 值，仅提取 sing-box 可执行文件。
-
-## 开发与验证
-
-需要较新的 Rust 工具链（本机使用 Rust 1.94），首次构建需要下载依赖。
+## Build and run
 
 ```sh
 cargo build --release --locked
-cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
+./sing
+./sing --demo
+./sing --preview
 ```
 
-本工作区把 Cargo 缓存放在 `.build/cargo`；如希望复用它，在命令前加 `CARGO_HOME="$PWD/.build/cargo"`。
+`--demo` uses fictional, in-memory data and performs no network operations. `--preview` prints a static terminal preview. Minimum terminal size: 54 × 18; wide terminals show the sidebar and, at 115 columns, a list/detail split.
 
-显式的网络 / 本地端口测试不会混入普通测试：
+The `./sing` launcher prefers `target/release/sing`. Rebuild release after changing the code, or run the debug binary explicitly during development.
+
+## Navigation
+
+```text
+Overview
+Configuration
+  Inbounds
+  Outbounds
+  Routing
+  DNS
+  Resources
+  Advanced
+Activity
+  Connections
+  Logs
+  Diagnostics
+Settings
+```
+
+- `Tab`: switch between navigation and content. Arrows or `j`/`k` move; Enter opens/selects. On narrow terminals, navigation temporarily replaces content.
+- `[` / `]`: switch a page's subpages. `/`: filter; Esc clears the filter.
+- `a`: add; `e`: form; `E`: native JSON; `x`: remove. `Enter`: details or a selector's member picker.
+- `F2` / `Ctrl+S`: save the draft. Esc cancels the current editor. Space or left/right cycles choices; Space opens a member picker.
+- `A`: Review & Apply; `V`: core validation; `p`: redacted effective configuration preview.
+- `c`: Start, only when stopped; `d`: Stop and restore managed proxy settings; `q`: close the UI without stopping the manager/core.
+- `?`: contextual help. `M`: explicit traffic-routing override.
+
+Structural changes remain draft changes until Apply. Application restarts the core and interrupts connections. A loaded selector's member can be changed through gRPC without restarting the entire core. Its selected member is also persisted in the native draft. Edited/new group membership must be applied before selecting a member not loaded by the core.
+
+### Inbounds and system integration
+
+Manage multiple native listeners. Forms cover local mixed listeners and TUN addresses, stack, route settings, interface DNS mode and MTU. Use native JSON for additional listener types/fields. Listener authentication is native `users` JSON; do not expose an unauthenticated proxy publicly.
+
+`s` opens system integration. `port` means no system-proxy takeover; `system` enables macOS proxy management against the specified local mixed-proxy port. The matching unauthenticated loopback mixed inbound must exist in the document. This port also serves the client's explicit connectivity check and subscription-download proxy fallback. System integration does not rewrite listeners.
+
+TUN is determined by the document's inbounds, independently of macOS system-proxy integration. TUN requires explicit administrator authorization and can interrupt SSH. In 1.14, TUN `dns_mode` defaults to `hijack`, which includes platform interface-DNS configuration where available. It is incorrect to assume TUN never changes native DNS settings. Application-owned DoH may follow another path.
+
+Linux has no automatic desktop system-proxy integration in this release. SSH always controls the host on which sing runs, not the local computer displaying the SSH session. Linux/TUN/SSH recovery and dual-stack behavior still require dedicated real-host acceptance testing. The existing TUN helper is experimental, not a guaranteed crash-safe network recovery service.
+
+### Outbounds
+
+Nodes, `direct`, `selector` and `urltest` groups share one list. Group membership may reference other groups/endpoints; cycles and missing members are rejected before application. Names are shown in pickers while native tags remain the references. Changing a tag does not automatically rename every reference: repair references before Apply.
+
+`t` requests a native URL latency test for the selected loaded outbound. Results appear beside outbounds when returned by the core. URLTest groups use their native URL/interval/tolerance; the default template tests gstatic every three minutes while running. Latency is not bandwidth or streaming-unlock capability.
+
+Native JSON retains protocol-specific TLS, transport, multiplexing and dial settings. The form does not silently normalize or discard fields it does not expose. Advanced fields are not generic speed switches.
+
+### Routing and DNS
+
+Routing has one ordered native rules list and an Options subpage for `final`, interface detection and the default resolver for server hostnames. `J`/`K` moves a rule. Ordinary match fields accept comma-separated lists; logical rules retain nested native conditions. Additional conditions/actions remain editable through JSON.
+
+DNS has **Resolvers / Rules / Options**. Add named local, UDP, TCP, TLS, HTTPS, QUIC, HTTP/3 or FakeIP resolvers. Configure server IP/hostname, custom port/path, outbound detour and bootstrap resolver. Blank detour means direct dialing; do not select an empty direct outbound as a DNS detour. DNS rules and final resolver are independent of website routing. Cache, timeout, IP preference, optimistic caching and reverse mapping have option fields; richer values survive form round trips.
+
+`M` exposes Rule / Global / Direct as client traffic-routing overrides:
+
+- Rule runs the original native route rules.
+- Global/Direct replace traffic routing decisions, retaining sniff/DNS-hijack actions and an optional explicit private-IP exception.
+- **DNS servers/rules and their outbound dependencies are unchanged.** Direct is therefore not a promise that internal DNS traffic avoids all proxy nodes. Review explains this before Apply. No automatic fallback to direct is added when a node fails.
+
+The DNS template tests validate syntax with the actual 1.14 core; they do not measure resolver reachability, DNS leakage, video performance or throughput. FakeIP configuration support is not a claim of tested end-to-end FakeIP behavior on each platform.
+
+### Resources
+
+Subscriptions: `a` imports a URL, supported node URI, pasted content or local file; `r` previews refresh; Enter confirms and Esc cancels. URI/base64, common Clash YAML node entries and sing-box node JSON are converted locally. This does not adopt a foreign full configuration's DNS/routes.
+
+Rule sets: `a` adds native inline/local/remote JSON or SRS references; `C` converts a common QX/Clash/domain/CIDR list and appends a native routing rule to the chosen target. Review unsupported entries before accepting partial conversion. Complex native rule sets should be used natively, not sent through the simplified cross-format converter.
+
+Native remote resources use sing-box's own HTTP client/update/cache settings. Converted resources are fetched/updated by sing with a confirmation preview, using direct download first and the running local proxy as fallback. `r` refreshes converted resources without rewriting DNS or existing native routing decisions. Native remote resources update according to their configured core policy; `r` is not a forced native-resource refresh operation.
+
+Subscription updates never silently overwrite a locally modified node object. Rename its native tag to detach the local copy, then refresh the source. Existing nonempty selector membership is explicit, not automatically expanded or repaired after node removals. Broken references must be resolved before applying. Removing/detaching a converted native rule set also removes its conversion metadata; native routing references remain visible for repair.
+
+### Advanced, diagnostics and privacy
+
+Advanced lists all document sections; `E` edits the entire document as strict JSON, including additional endpoints, services, TLS, cache and other version-supported capabilities. Unknown fields and ordered arrays are preserved on save. This is semantic JSON preservation, not preservation of comments or whitespace. Invalid drafts may be saved for further editing; Apply runs reference checks and `sing-box check` before stopping a running instance.
+
+The `management` API service is a protected integration point: keep its loopback address, non-TLS transport and secret. Change its port through Settings, which updates the matching native field. Other native services remain untouched. A complete externally sourced config requires retaining this service before sing can manage it.
+
+Native editing exposes credentials intentionally. Normal snapshots, previews and logs redact known sensitive fields, but do not share raw-editor screenshots or assume arbitrary unknown extension fields can be automatically classified as secrets. Revision checks prevent a stale native editor or Apply confirmation from overwriting a newer draft. Application failure attempts to restore the last running configuration; it cannot guarantee recovery from arbitrary host/network failures.
+
+Connections shows core observations, not predicted rule matches. `h` includes recent closed connections, `x` closes one, and `r` refreshes. The manager limits displayed samples to 500 records; this is not complete traffic history. Logs and local Diagnostics are separate from the explicit `v` HTTPS connectivity probe. Browser slowness has not been proven fixed by this release.
+
+Runtime files remain in the user's private data directory. Existing `sbtui` directories are still found to avoid orphaning a running manager. `--data-dir` selects an isolated instance. Source Git excludes runtime files, logs, credentials and builds.
+
+## Verification
 
 ```sh
-# 下载并校验官方核心，仅执行 version，不修改网络
-cargo test install_official_core -- --ignored --nocapture
+cargo test --offline --locked
+cargo fmt --check
+cargo clippy --offline --all-targets -- -D warnings
 
-# 创建临时 loopback 服务，不启用 TUN；假节点，不需要你的订阅
-SING_TEST_CORE="$PWD/.build/test-core/bin/sing-box" \
-  cargo test real_core_lifecycle_and_grpc -- --ignored --nocapture
-SING_TEST_CORE="$PWD/.build/test-core/bin/sing-box" \
-  cargo test --test manager -- --ignored --nocapture
-SING_TEST_CORE="$PWD/.build/test-core/bin/sing-box" \
-  cargo test --test rules_flow -- --ignored --nocapture
-
-# macOS 系统配置仅只读；不会执行原生写入
-cargo test read_only_native_inventory -- --ignored --nocapture
-# 连通性判断的本地模拟响应测试；不连接公开网址
-cargo test connectivity_probe_requires_204 -- --ignored --nocapture
+SING_TEST_CORE=/absolute/path/to/sing-box cargo test --offline -- \
+  --ignored --skip install_official_core --skip public_youtube_rule_conversion --nocapture
 ```
 
-`manager` 集成测试中的系统代理助手是临时模拟 Unix socket，并非 root 助手；验证启动顺序、失败断开保持核心、恢复后关闭、部分失败回滚，不调用系统设置写入。普通测试还覆盖持久恢复、外部修改冲突、写前备份失败、服务删除 / 无法读取、监护条件及小终端状态与确认操作。
+The explicit suite uses temporary fictional data, loopback servers and a read-only macOS inventory check. System-proxy writes are tested with a MOCK helper. No user subscription, real system-proxy write, TUN activation or public DNS/bandwidth test is included. Tests cover migration backup and redaction, native round trips, stale edits/reviews, resolver template validation, nested selectors, draft-vs-running state, apply/rollback, cross-format imports and existing lifecycle behavior.
 
-`rules_flow` 验证远程规则预览 / 取消 / 保存 / 更新失败保护、分组引用、规则顺序、配套 DNS 与 urltest 的真实核心校验，并实际向本地模拟 HTTP 节点 A / B 转发虚构域名的请求，验证规则绑定和实时换节点。另用本地 HTTP 目标与持续 CONNECT 隧道验证无节点直连、规则阻断、指定组全局覆盖、内网直连例外、原生连接观察和只关闭一条连接、模式保存/生效分离与完整策略回滚。自动组仅校验配置，不在测试中启动公开测速。普通测试 70 项，显式本地 / 只读测试 7 项通过；公开 YouTube 链接下载测试此前未通过，不能等同于真实网络性能或 Linux 验收。
-
-当前未完成：系统代理真实写入自动化验收、签名 / 分发和持久特权服务、开机自启、定时订阅更新、DNS 耗时/丢包/带宽诊断、复杂规则 / 二进制规则集转换、App 选择器、任意 JSON 手改合并、完整中文诊断信息、Linux / SSH / TUN 真机验证。产品目标见 `docs/product-design-v0.1.md`，它描述目标，不是完成清单。
-
-官方接口参考：[API Service](https://sing-box.sagernet.org/configuration/service/api/)、[1.14 gRPC schema](https://github.com/SagerNet/sing-box/blob/v1.14.0/daemon/started_service.proto)、[release hashes](https://github.com/SagerNet/sing-box/releases/expanded_assets/v1.14.0)。
+Remaining work includes full platform acceptance, richer native-field forms, native full-profile import assistance, DNS/path timing diagnostics, subscription scheduling, automatic membership policies and hardened service/autostart integration. The architecture keeps native capabilities accessible without claiming all these workflows are finished.

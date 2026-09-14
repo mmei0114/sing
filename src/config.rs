@@ -90,6 +90,14 @@ pub fn validate(s: &Settings) -> Result<()> {
 }
 
 pub fn target_exists(store: &Store, target: &str, reject: bool) -> bool {
+    if let Some(doc) = &store.native {
+        return (reject && target == "reject")
+            || ["/outbounds", "/endpoints"].iter().any(|p| {
+                crate::native::array(doc, p)
+                    .iter()
+                    .any(|v| crate::native::tag(v) == target)
+            });
+    }
     ["proxy", "direct"].contains(&target)
         || (reject && target == "reject")
         || store.proxy_groups.iter().any(|g| g.tag() == target)
@@ -189,6 +197,9 @@ pub fn validate_references(store: &Store) -> Result<()> {
 }
 
 pub fn generate(store: &Store) -> Result<Value> {
+    if store.native.is_some() {
+        return crate::native::effective(store);
+    }
     validate(&store.settings)?;
     let mut effective = store.clone();
     if store.settings.route_mode != "rule" {
@@ -374,6 +385,17 @@ pub fn target_label(store: &Store, tag: &str) -> String {
 }
 
 pub fn diagnostics(saved: &Store, running: Option<&Store>) -> String {
+    if saved.native.is_some() {
+        let describe = |s: &Store| {
+            match crate::native::effective(s) {
+            Ok(d) => format!("Routing: {}\nFinal outbound: {}\nFinal DNS: {}\nInbounds: {} · Outbounds: {} · DNS servers: {}\nReference checks: passed\n",
+                s.settings.route_mode, d["route"]["final"], d["dns"]["final"], crate::native::array(&d,"/inbounds").len(),
+                crate::native::array(&d,"/outbounds").len(), crate::native::array(&d,"/dns/servers").len()),
+            Err(e) => format!("Configuration issue: {e}\n"),
+        }
+        };
+        return format!("DRAFT\n{}\nRUNNING\n{}\nThis is a configuration report, not a network measurement.\nSystem proxy covers cooperating applications. TUN may configure interface DNS and routing; application DoH can differ.\nProcess data depends on capture and OS visibility. DNS latency, throughput and UDP loss are not measured here.",describe(saved),running.map(describe).unwrap_or_else(||"Not running\n".into()));
+    }
     let zh = saved.settings.language == "zh";
     let t = |en, cn| if zh { cn } else { en };
     let mut text = t(
@@ -481,8 +503,22 @@ pub fn redacted(value: &Value) -> Value {
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        if ["password", "uuid", "secret", "private_key", "public_key"]
-                            .contains(&k.as_str())
+                        if [
+                            "password",
+                            "uuid",
+                            "secret",
+                            "private_key",
+                            "public_key",
+                            "token",
+                            "authorization",
+                            "headers",
+                            "certificate",
+                            "key",
+                            "pre_shared_key",
+                            "url",
+                            "download_url",
+                        ]
+                        .contains(&k.as_str())
                         {
                             json!("••••••")
                         } else {
