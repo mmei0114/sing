@@ -1,0 +1,7 @@
+{
+  "outbounds": [
+    {"type":"trojan","tag":"Tokyo / Sample","server":"jp.example.invalid","server_port":443,"password":"fictional","tls":{"enabled":true}},
+    {"type":"direct","tag":"direct"},
+    {"type":"selector","tag":"choose","outbounds":["Tokyo / Sample"]}
+  ]
+}

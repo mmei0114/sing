@@ -1,0 +1,7 @@
+/target/
+/.build/
+/bin/
+/test-output/
+/.local-data/
+*.log
+.DS_Store

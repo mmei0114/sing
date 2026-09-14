@@ -1,0 +1,12 @@
+#!/bin/sh
+# Convenience launcher. No build, installation, or network changes are automatic.
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -x "$project_dir/target/release/sing" ]; then
+    exec "$project_dir/target/release/sing" "$@"
+fi
+if [ -x "$project_dir/target/debug/sing" ]; then
+    exec "$project_dir/target/debug/sing" "$@"
+fi
+echo "Build first: cargo build --release --locked" >&2
+exit 1
