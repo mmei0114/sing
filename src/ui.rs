@@ -38,6 +38,7 @@ const PAGES: [&str; 11] = [
     "Diagnostics",
     "Settings",
 ];
+const PAGE_KEYS: [char; 11] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-'];
 fn text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -207,7 +208,7 @@ impl App {
         5 if self.tabs[5]==0=>self.snapshot.store.subscriptions.iter().enumerate().map(|(i,s)|(i,format!("{} · {}",s.name,s.format),json!({"name":s.name,"source":s.source,"updated_at":s.updated_at,"warnings":s.warnings}))).collect(),
         7=>self.connections.items.iter().enumerate().filter(|(_,c)|self.show_closed||c.closed_at==0).map(|(i,c)|(i,format!("{} → {} {}",if c.domain.is_empty(){&c.destination}else{&c.domain},c.outbound,if c.closed_at==0{""}else{"[closed]"}),serde_json::to_value(c).unwrap())).collect(),
         3 if self.tabs[3]==1=>vec![(0,"Routing options".into(),doc["route"].clone())],4 if self.tabs[4]==2=>vec![(0,"DNS options".into(),doc["dns"].clone())],
-        6=>doc.as_object().map(|m|m.iter().enumerate().map(|(i,(k,v))|(i,k.clone(),v.clone())).collect()).unwrap_or_default(),
+        6=>doc.as_object().map(|m|m.iter().filter(|(k,_)|!["inbounds","outbounds","route","dns"].contains(&k.as_str())).enumerate().map(|(i,(k,v))|(i,k.clone(),v.clone())).collect()).unwrap_or_default(),
         _=>native::array(&doc,self.path()).iter().enumerate().map(|(i,v)|{let label=if self.page==2{self.snapshot.store.nodes.iter().find(|n|n.tag()==native::tag(v)).map(|n|format!("{} · {} · {}",n.name,n.kind(),n.server())).unwrap_or_else(||format!("{} · {}",self.label(native::tag(v)),text(&v["type"])))}else{title(v)};let delay=if self.page==2{self.snapshot.groups.group.iter().flat_map(|g|g.items.iter()).filter(|m|m.tag==native::tag(v)&&m.delay>0).max_by_key(|m|m.time).map(|m|format!(" · {} ms",m.delay)).unwrap_or_default()}else{String::new()};(i,format!("{label}{delay}"),v.clone())}).collect()};
         let q = self.filter.value.to_lowercase();
         all.into_iter()
@@ -668,19 +669,31 @@ impl App {
             self.nav = !self.nav;
             return Ok(None);
         }
+        if let K::Char(c) = k.code {
+            if let Some(page) = PAGE_KEYS.iter().position(|key| *key == c) {
+                self.page = page;
+                self.nav = false;
+                self.filter = Input::new(String::new());
+                return Ok((page == 7).then_some(Action::Connections));
+            }
+        }
         if self.nav {
-            if matches!(k.code, K::Enter | K::Right) {
+            if matches!(k.code, K::Enter | K::Esc) {
                 self.nav = false;
                 return Ok(None);
             }
             match k.code {
-                K::Up | K::Char('k') => self.page = self.page.saturating_sub(1),
-                K::Down | K::Char('j') => self.page = (self.page + 1).min(10),
-                K::Right | K::Enter => self.nav = false,
+                K::Left | K::Up | K::Char('k') => self.page = self.page.saturating_sub(1),
+                K::Right | K::Down | K::Char('j') => self.page = (self.page + 1).min(10),
                 _ => {}
             }
             self.filter = Input::new(String::new());
-            if self.page == 7 && matches!(k.code, K::Up | K::Down | K::Char('j' | 'k')) {
+            if self.page == 7
+                && matches!(
+                    k.code,
+                    K::Left | K::Right | K::Up | K::Down | K::Char('j' | 'k')
+                )
+            {
                 return Ok(Some(Action::Connections));
             }
         }
@@ -701,6 +714,7 @@ impl App {
             K::Down|K::Char('j')=>self.selected[self.page]=(self.selected[self.page]+1).min(self.rows().len().saturating_sub(1)),K::Up|K::Char('k')=>self.selected[self.page]=self.selected[self.page].saturating_sub(1),
             K::Char('['|']') if !self.tab_names().is_empty()=>{let n=self.tab_names().len();self.tabs[self.page]=if k.code==K::Char(']'){(self.tabs[self.page]+1)%n}else{(self.tabs[self.page]+n-1)%n};self.selected[self.page]=0;self.filter=Input::new(String::new());},
             K::Char('a') if self.page==0||(self.page==5&&self.tabs[5]==0)=>self.import(false),K::Char('C') if self.page==5&&self.tabs[5]==1=>self.import(true),
+            K::Char('g') if self.page==2=>{ensure!(s.native.is_some(),"Initialize native configuration on Overview (u)");self.dialog=Some(Dialog::Add{choices:templates("/outbounds").into_iter().take(2).collect(),selected:0});},
             K::Char('a') if [1,2,3,4,5].contains(&self.page)=>{ensure!(s.native.is_some(),"Initialize native configuration on Overview (u)");let choices=templates(self.path());ensure!(!choices.is_empty(),"Edit Options instead");self.dialog=Some(Dialog::Add{choices,selected:0});},
             K::Char('s') if self.page==1=>self.settings_form(true,false),K::Char('e') if self.page==10=>self.settings_form(false,false),
             K::Char('e'|'E') if [1,2,3,4,5,6].contains(&self.page)=>{if self.page==5&&self.tabs[5]==0{return Ok(None);}let p=if self.page==6{if k.code==K::Char('E'){String::new()}else{let(_,n,_)=self.current().context("Select an object")?;format!("/{}",n.replace('~',"~0").replace('/',"~1"))}}else if(self.page==3&&self.tabs[3]==1)||(self.page==4&&self.tabs[4]==2){self.path().into()}else{let(i,_,_)=self.current().context("Select an object")?;format!("{}/{i}",self.path())};return Ok(Some(self.open(p,if k.code==K::Char('E')||self.page==6{Intent::Raw}else{Intent::Form})));},
@@ -971,6 +985,71 @@ pub fn preview() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn top_shortcuts_and_group_entry_preserve_document() {
+        let mut a = App::new(sample().unwrap(), true);
+        let before = a.doc();
+        a.key(KeyEvent::new(K::Char('3'), M::NONE)).unwrap();
+        assert_eq!(a.page, 2);
+        a.key(KeyEvent::new(K::Char('g'), M::NONE)).unwrap();
+        let Some(Dialog::Add { choices, .. }) = &a.dialog else {
+            panic!()
+        };
+        assert_eq!(choices.len(), 2);
+        assert!(choices[0].0.contains("Manual group"));
+        a.key(KeyEvent::new(K::Esc, M::NONE)).unwrap();
+        a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
+        a.key(KeyEvent::new(K::Right, M::NONE)).unwrap();
+        assert_eq!(a.page, 3);
+        assert!(a.nav);
+        a.key(KeyEvent::new(K::Enter, M::NONE)).unwrap();
+        assert!(!a.nav);
+        assert_eq!(a.doc(), before);
+    }
+    #[test]
+    fn advanced_excludes_dedicated_pages_but_full_edit_remains_available() {
+        let mut a = App::new(sample().unwrap(), true);
+        a.page = 6;
+        let before = a.doc();
+        let rows = a.rows();
+        assert!(rows.iter().all(
+            |(_, name, _)| !["dns", "route", "inbounds", "outbounds"].contains(&name.as_str())
+        ));
+        assert!(rows.iter().any(|(_, name, _)| name == "services"));
+        assert!(
+            matches!(a.key(KeyEvent::new(K::Char('E'), M::NONE)).unwrap(), Some(Action::ReadNative(p)) if p.is_empty())
+        );
+        assert_eq!(a.doc(), before);
+    }
+    #[test]
+    fn top_navigation_and_import_hints_visible_at_all_sizes() {
+        for (w, h) in [(120, 35), (80, 24), (54, 18)] {
+            let mut a = App::new(sample().unwrap(), true);
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            for (page, tab, hint) in [
+                (0, 0, "a Import subscription"),
+                (2, 0, "g New group"),
+                (5, 0, "a Import subscription"),
+                (5, 1, "C Import QX/Clash rules"),
+            ] {
+                a.page = page;
+                a.tabs[page] = tab;
+                t.draw(|f| view::draw(f, &a)).unwrap();
+                let lines: Vec<_> = t
+                    .backend()
+                    .buffer()
+                    .content
+                    .chunks(w as usize)
+                    .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+                    .collect();
+                let rendered = lines.join("\n");
+                assert!(rendered.contains(hint), "{w}x{h}: {hint}");
+                assert!(lines[1].contains("1 Overview"));
+                assert!(lines[..5].join("\n").contains("- Settings"));
+                assert!(rendered.contains("Quit"));
+            }
+        }
+    }
     #[test]
     fn native_form_preserves_hidden_fields() {
         let s = sample().unwrap().store;

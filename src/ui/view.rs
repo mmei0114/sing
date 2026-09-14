@@ -99,7 +99,58 @@ fn details(a: &App, v: &Value) -> String {
         .unwrap_or_default()
 }
 pub(super) fn help() -> String {
-    "Tab: sidebar / content   ↑↓ or j/k: navigate\n/: filter   [ / ]: previous / next subpage\na: add   e: form   E: native JSON   x: remove\nEnter: details / select group member\nJ / K: move rule down / up\nF2 / Ctrl+S: save draft   Esc: cancel / close\nA: Review & Apply   V: core check   p: redacted preview\nc: Start (when stopped)   d: Stop   q: close interface\n\nInbounds: s system integration, separate from listeners.\nOutbounds: Enter selects a group member; t tests latency.\nResources: C converts a rule list; r refreshes a subscription.\nDNS / Routing: Options subpage sets defaults.\nConnections: r refresh, h recent closed, x close one.\nSettings: e core path, i install. Advanced: E entire document, b rollback.\n\nJSON fields use native syntax. Blank optional fields omit the override. Form edits preserve fields not changed by the form. E exposes credentials: do not share its screen.\n\nGlobal / Direct override traffic routing. DNS is unchanged. TUN can change routes and interface DNS on this host, including over SSH. Management API address/credentials are reserved for sing.\n\nSubscription refresh reports conflicts with locally modified nodes. Rename a node tag to detach it before replacing its subscription version. Review listener exposure and network paths before applying imported configuration.".into()
+    "1–9 / 0 / -: open the numbered top page\nTab: focus top navigation / content; ←→: choose page\n↑↓ or j/k: list movement   /: filter   [ / ]: subpage\na: add   e: form   E: native JSON   x: remove\nEnter: details / select group member\nJ / K: move rule down / up\nF2 / Ctrl+S: save draft   Esc: cancel / close\nA: Review & Apply   V: core check   p: redacted preview\nc: Start (when stopped)   d: Stop   q: close interface\n\nOverview: a imports a node subscription.\nInbounds: s system integration, separate from listeners.\nOutbounds: g new group, a other outbound, Enter selects a member, t latency.\nResources / Subscriptions: a import, r refresh, x remove.\nResources / Rule sets: C import QX/Clash list and choose its routing target; a adds a native rule set. Check conversion warnings before confirming.\nDNS / Routing: Options subpage sets defaults.\nConnections: r refresh, h recent closed, x close one.\nSettings: e core path, i install. Advanced: additional sections, E entire document, b rollback.\n\nJSON fields use native syntax. Blank optional fields omit the override. Form edits preserve fields not changed by the form. E exposes credentials: do not share its screen.\n\nGlobal / Direct override traffic routing. DNS is unchanged. TUN can change routes and interface DNS on this host, including over SSH. Management API address/credentials are reserved for sing.\n\nSubscription refresh reports conflicts with locally modified nodes. Rename a node tag to detach it before replacing its subscription version. Review listener exposure and network paths before applying imported configuration.".into()
+}
+fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![];
+    let mut spans = vec![];
+    let mut used = 0;
+    for (i, page) in PAGES.iter().enumerate() {
+        let label = format!(" {} {page} ", PAGE_KEYS[i]);
+        let size = label.len() as u16;
+        if used + size > width && !spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        let style = if i == a.page {
+            Style::default()
+                .bg(ACCENT)
+                .fg(Color::Rgb(17, 23, 30))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(MUTED)
+        };
+        spans.push(Span::styled(label, style));
+        used += size;
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+fn page_actions(a: &App) -> &'static str {
+    if a.nav {
+        return "←→ Choose page · Enter Open · Tab Back to content";
+    }
+    match (a.page, a.tabs[a.page]) {
+        (0, _) if a.snapshot.store.native.is_none() => "u Upgrade config · a Import subscription · i Install core",
+        (0, _) => "a Import subscription · Enter Select node · M Routing mode",
+        (1, _) => "a Add inbound · e Edit · E JSON · s System proxy · x Remove",
+        (2, _) => "g New group · a Add outbound · Enter Select node\ne Edit · E JSON · t Test latency · / Filter",
+        (3, 0) => "a Add rule · e Edit · J/K Reorder · x Remove · [] Options",
+        (3, _) => "e Edit routing defaults · E JSON · [] Rules",
+        (4, 0) => "a Add resolver · e Edit · E JSON · x Remove · [] Rules/Options",
+        (4, 1) => "a Add DNS rule · e Edit · J/K Reorder · [] Resolvers/Options",
+        (4, _) => "e Edit DNS defaults · E JSON · [] Resolvers/Rules",
+        (5, 0) => "a Import subscription · r Refresh · x Remove\n[] Rule sets",
+        (5, _) => "C Import QX/Clash rules · a Add native rule set\ne Edit · r Refresh converted rules · [] Subscriptions",
+        (6, _) => "e Edit section · E Full JSON · b Rollback",
+        (7, _) => "r Refresh · Enter Details · h Include closed · x Close one",
+        (8, _) => "r Read core logs",
+        (9, _) => "r Inspect configuration · V Core check · p Preview",
+        (10, _) => "e Core settings · i Install core",
+        _ => "",
+    }
 }
 pub(super) fn draw(f: &mut Frame, a: &App) {
     let area = f.area();
@@ -118,11 +169,14 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         );
         return;
     }
+    let tabs = navigation(a, area.width);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
+            Constraint::Length(tabs.len() as u16),
+            Constraint::Min(5),
             Constraint::Length(2),
-            Constraint::Min(10),
             Constraint::Length(2),
             Constraint::Length(1),
         ])
@@ -156,64 +210,9 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         ])),
         rows[0],
     );
-    let wide = area.width >= 88;
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(if wide { 20 } else { 0 }),
-            Constraint::Min(1),
-        ])
-        .split(rows[1]);
-    if wide {
-        let nav_rows = [0, 2, 3, 4, 5, 6, 7, 9, 10, 11, 13];
-        let mut lines = vec![];
-        for row in 0..14 {
-            let entry = nav_rows.iter().position(|r| *r == row);
-            lines.push(if let Some(i) = entry {
-                Line::styled(
-                    format!(" {}{}", if i == a.page { "› " } else { "  " }, PAGES[i]),
-                    Style::default()
-                        .fg(if i == a.page { ACCENT } else { MUTED })
-                        .add_modifier(if i == a.page {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                )
-            } else {
-                Line::styled(
-                    if row == 1 {
-                        " Configuration"
-                    } else if row == 8 {
-                        " Activity"
-                    } else {
-                        ""
-                    },
-                    Style::default().fg(MUTED),
-                )
-            });
-        }
-        f.render_widget(
-            Paragraph::new(lines).block(block(if a.nav { "Navigate" } else { "sing" })),
-            columns[0],
-        );
-    }
-    let content = columns[1];
-    if !wide && a.nav {
-        f.render_widget(
-            List::new(
-                PAGES
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        ListItem::new(format!("{} {p}", if i == a.page { "›" } else { " " }))
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .block(block("Navigate · Enter opens")),
-            content,
-        );
-    } else if a.page == 0 {
+    f.render_widget(Paragraph::new(tabs), rows[1]);
+    let content = rows[2];
+    if a.page == 0 {
         let s = &a.snapshot;
         let doc = a.doc();
         let live = s.running_settings.as_ref();
@@ -381,10 +380,16 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         );
         if items.is_empty() {
             f.render_widget(
-                Paragraph::new(if a.page == 7 {
+                Paragraph::new(if a.page == 6 {
+                    "No additional sections. E opens the full document."
+                } else if a.page == 7 {
                     "No sampled connections. r refreshes; h toggles closed."
                 } else if a.snapshot.store.native.is_none() {
                     "Initialize native configuration on Overview (u)."
+                } else if a.page == 5 && a.tabs[5] == 0 {
+                    "No subscriptions. a imports a subscription link."
+                } else if a.page == 5 {
+                    "No rule sets. C imports a QX/Clash rule list."
                 } else {
                     "No items. a adds an object; ? shows help."
                 })
@@ -415,18 +420,30 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         model::clean(&a.notice)
     };
     f.render_widget(
+        Paragraph::new(page_actions(a))
+            .style(Style::default().fg(ACCENT))
+            .wrap(Wrap { trim: false }),
+        rows[3],
+    );
+    f.render_widget(
         Paragraph::new(notice)
             .style(Style::default().fg(if a.error { Color::LightRed } else { MUTED }))
             .wrap(Wrap { trim: false }),
-        rows[2],
+        rows[4],
     );
     f.render_widget(
-        Paragraph::new(" Tab Navigate  ? Help  A Apply  d Stop  q Quit")
+        Paragraph::new(" Tab Pages  ? Help  A Apply  d Stop  q Quit")
             .style(Style::default().fg(MUTED)),
-        rows[3],
+        rows[5],
     );
     if let Some(d) = &a.dialog {
-        draw_dialog(f, d, rows[1], Some(a));
+        let dialog_area = Rect::new(
+            content.x,
+            content.y,
+            content.width,
+            content.height + rows[3].height,
+        );
+        draw_dialog(f, d, dialog_area, Some(a));
     }
 }
 pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&App>) {
@@ -434,12 +451,15 @@ pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&Ap
     f.render_widget(Clear, area);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
         .split(area);
     let hint = match d {
-        Dialog::Form(_) | Dialog::Json { .. } | Dialog::Members { .. } => {
-            " F2 Save draft  Ctrl+U Clear field  Esc Cancel"
-        }
+        Dialog::Form(form) => match form.action {
+            FormAction::Import | FormAction::Convert => " F2 Review import  Esc Cancel\n Tab/↑↓ Field  ←→ Choice  Ctrl+U Clear",
+            _ => " F2 Save draft  Esc Cancel\n Tab/↑↓ Field  Space Choose  Ctrl+U Clear",
+        },
+        Dialog::Json { .. } => " F2 Save draft  Esc Cancel\n Ctrl+U Clear  Arrow keys Move cursor",
+        Dialog::Members { .. } => " Space Toggle  F2 Use members  Esc Back\n Returns to group form; F2 there saves the draft",
         Dialog::Text {
             action: Some(_), ..
         } => " Enter Confirm  ↑↓ Scroll  Esc Cancel",

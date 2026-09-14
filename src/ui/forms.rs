@@ -533,7 +533,11 @@ pub(super) fn templates(path: &str) -> Vec<(String, Value)> {
     values
         .into_iter()
         .map(|v| {
-            let label = if v.get("type").is_some() {
+            let label = if v["type"] == "selector" {
+                "Manual group (selector)".into()
+            } else if v["type"] == "urltest" {
+                "Automatic group (urltest)".into()
+            } else if v.get("type").is_some() {
                 text(&v["type"])
             } else if v.get("process_name").is_some() {
                 "Process rule".into()

@@ -8,6 +8,10 @@ The native JSON document is now authoritative. Forms edit individual subtrees of
 
 The UI is English-only; names in subscriptions and user-created objects retain their original language.
 
+### 0.5.1 — top navigation and visible actions
+
+Top tabs replace the sidebar, with direct page keys and compact actions shown on each page. Outbounds has a `g` group shortcut; import and conversion controls are visible under Resources. Advanced lists only sections without dedicated pages, while `E` still opens the complete document. This UI-only update keeps manager protocol 6: from 0.5.0, close the interface with `q` and reopen `./sing`; no shutdown or migration is needed.
+
 This is the first implementation of the new architecture, not a claim that every native field has a dedicated form or that all platforms have been validated. The selected core validates the configuration before application. Version 1.14.0 is the tested baseline; feature availability also depends on platform and core build.
 
 ## Upgrade from 0.4.1
@@ -33,31 +37,21 @@ cargo build --release --locked
 ./sing --preview
 ```
 
-`--demo` uses fictional, in-memory data and performs no network operations. `--preview` prints a static terminal preview. Minimum terminal size: 54 × 18; wide terminals show the sidebar and, at 115 columns, a list/detail split.
+`--demo` uses fictional, in-memory data and performs no network operations. `--preview` prints a static terminal preview. Minimum terminal size: 54 × 18; top tabs wrap to fit the terminal. At 115 columns, pages show a list/detail split.
 
 The `./sing` launcher prefers `target/release/sing`. Rebuild release after changing the code, or run the debug binary explicitly during development.
 
 ## Navigation
 
 ```text
-Overview
-Configuration
-  Inbounds
-  Outbounds
-  Routing
-  DNS
-  Resources
-  Advanced
-Activity
-  Connections
-  Logs
-  Diagnostics
-Settings
+1 Overview   2 Inbounds   3 Outbounds   4 Routing   5 DNS
+6 Resources  7 Advanced   8 Connections 9 Logs      0 Diagnostics  - Settings
 ```
 
-- `Tab`: switch between navigation and content. Arrows or `j`/`k` move; Enter opens/selects. On narrow terminals, navigation temporarily replaces content.
+- `1`–`9`, `0`, `-`: open the corresponding top tab directly. `Tab` focuses navigation; left/right chooses a page, Enter returns to content. Arrows or `j`/`k` move within lists. Navigation never replaces page content.
 - `[` / `]`: switch a page's subpages. `/`: filter; Esc clears the filter.
 - `a`: add; `e`: form; `E`: native JSON; `x`: remove. `Enter`: details or a selector's member picker.
+- `g` in Outbounds: create a manual or automatic group. Overview `a` and Resources / Subscriptions `a`: import a node subscription. Resources / Rule sets `C`: import and convert a QX/Clash rule list, choosing its routing target in the same form.
 - `F2` / `Ctrl+S`: save the draft. Esc cancels the current editor. Space or left/right cycles choices; Space opens a member picker.
 - `A`: Review & Apply; `V`: core validation; `p`: redacted effective configuration preview.
 - `c`: Start, only when stopped; `d`: Stop and restore managed proxy settings; `q`: close the UI without stopping the manager/core.
@@ -109,7 +103,7 @@ Subscription updates never silently overwrite a locally modified node object. Re
 
 ### Advanced, diagnostics and privacy
 
-Advanced lists all document sections; `E` edits the entire document as strict JSON, including additional endpoints, services, TLS, cache and other version-supported capabilities. Unknown fields and ordered arrays are preserved on save. This is semantic JSON preservation, not preservation of comments or whitespace. Invalid drafts may be saved for further editing; Apply runs reference checks and `sing-box check` before stopping a running instance.
+Advanced lists sections without dedicated pages (such as endpoints, services and experimental options); DNS, Routing, Inbounds and Outbounds are not duplicated there. `E` edits the entire document as strict JSON, including TLS, cache and other version-supported capabilities. Unknown fields and ordered arrays are preserved on save. This is semantic JSON preservation, not preservation of comments or whitespace. Invalid drafts may be saved for further editing; Apply runs reference checks and `sing-box check` before stopping a running instance.
 
 The `management` API service is a protected integration point: keep its loopback address, non-TLS transport and secret. Change its port through Settings, which updates the matching native field. Other native services remain untouched. A complete externally sourced config requires retaining this service before sing can manage it.
 

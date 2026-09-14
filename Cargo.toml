@@ -1,6 +1,6 @@
 [package]
 name = "sing"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "A terminal client for sing-box on macOS and Linux"
 license = "MIT"
