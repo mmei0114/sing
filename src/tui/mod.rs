@@ -18,10 +18,10 @@ mod overview;
 mod proxies;
 mod quick_rule;
 mod schema;
-mod text;
-mod theme;
 #[cfg(test)]
 mod tests;
+mod text;
+mod theme;
 
 use crate::{
     api, native,
@@ -61,7 +61,7 @@ impl Tab {
     pub fn name(self) -> &'static str {
         match self {
             Tab::Overview => "Overview",
-            Tab::Proxies => "Proxies & Rules",
+            Tab::Proxies => "Policies",
             Tab::Activity => "Activity",
             Tab::Config => "Config",
         }
@@ -139,9 +139,6 @@ impl App {
             .native
             .as_ref()
             .unwrap_or_else(|| EMPTY.get_or_init(|| json!({})))
-    }
-    pub fn running(&self) -> bool {
-        self.snap.connected
     }
     pub fn label(&self, tag: &str) -> String {
         labels::label(&self.snap.store, tag)
@@ -380,12 +377,20 @@ pub fn draw(f: &mut Frame, app: &App) {
 // ---- terminal lifecycle ----------------------------------------------------------
 fn enter() -> Result<()> {
     terminal::enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, event::EnableBracketedPaste)?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        event::EnableBracketedPaste
+    )?;
     Ok(())
 }
 fn leave() -> Result<()> {
     terminal::disable_raw_mode()?;
-    execute!(io::stdout(), event::DisableBracketedPaste, LeaveAlternateScreen)?;
+    execute!(
+        io::stdout(),
+        event::DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     Ok(())
 }
 struct Guard;
@@ -461,9 +466,10 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
             match id.and_then(|id| waiting.remove(&id)) {
                 Some(then) => {
                     let reply = r.unwrap_or_else(|e| {
-                        let mut r: Reply =
-                            serde_json::from_value(json!({"ok":false,"message":"","needs_auth":false}))
-                                .unwrap();
+                        let mut r: Reply = serde_json::from_value(
+                            json!({"ok":false,"message":"","needs_auth":false}),
+                        )
+                        .unwrap();
                         r.message = e.to_string();
                         r
                     });

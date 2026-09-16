@@ -109,9 +109,6 @@ impl Node {
     pub fn kind(&self) -> &str {
         self.outbound["type"].as_str().unwrap_or("unknown")
     }
-    pub fn server(&self) -> &str {
-        self.outbound["server"].as_str().unwrap_or("")
-    }
     pub fn tag(&self) -> String {
         format!("n-{}", self.id)
     }

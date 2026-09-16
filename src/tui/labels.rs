@@ -92,7 +92,11 @@ pub fn matcher(store: &Store, rule: &Value) -> String {
             .iter()
             .map(|r| matcher(store, r))
             .collect();
-        let joined = parts.join(if rule["mode"] == "or" { " or " } else { " and " });
+        let joined = parts.join(if rule["mode"] == "or" {
+            " or "
+        } else {
+            " and "
+        });
         return if rule["invert"] == true {
             format!("not ({joined})")
         } else {
@@ -135,7 +139,10 @@ pub fn matcher(store: &Store, rule: &Value) -> String {
             Value::Array(a) => a
                 .iter()
                 .map(|x| {
-                    let s = x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string());
+                    let s = x
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| x.to_string());
                     if k == "rule_set" {
                         label(store, &s)
                     } else {

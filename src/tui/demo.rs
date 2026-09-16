@@ -68,12 +68,16 @@ impl Demo {
             "type":"urltest","tag":"media","outbounds":[tags[2],tags[3],tags[4]],
             "url":"https://www.gstatic.com/generate_204","interval":"3m"
         }));
-        store.display_names.insert("media".into(), "Streaming".into());
+        store
+            .display_names
+            .insert("media".into(), "Streaming".into());
         store.display_names.insert("proxy".into(), "Proxy".into());
         d["route"]["rule_set"] = json!([
             {"type":"inline","tag":"streaming-sites","rules":[{"domain_suffix":["youtube.com","ytimg.com","googlevideo.com","spotify.com","netflix.com"]}]}
         ]);
-        store.display_names.insert("streaming-sites".into(), "Streaming sites".into());
+        store
+            .display_names
+            .insert("streaming-sites".into(), "Streaming sites".into());
         let rules = d["route"]["rules"].as_array_mut().unwrap();
         rules.push(json!({"rule_set":["streaming-sites"],"action":"route","outbound":"media"}));
         rules.push(json!({"domain_suffix":["cn","qq.com"],"action":"route","outbound":"direct"}));
@@ -174,7 +178,7 @@ impl Demo {
         }
         let n = self.clock as usize;
         for c in self.connections.iter_mut().filter(|c| c.closed_at == 0) {
-            if (c.created_at as u64 / 1000 + n as u64) % 7 == 0 {
+            if (c.created_at as u64 / 1000 + n as u64).is_multiple_of(7) {
                 c.closed_at = (self.clock * 1000) as i64;
             }
         }
@@ -231,16 +235,26 @@ impl Demo {
         let doc = self.store.native.as_ref().unwrap();
         let sets = native::array(doc, "/route/rule_set");
         let hit = |rule: &serde_json::Value| -> bool {
-            let list = |k: &str| native::array(rule, &format!("/{k}")).iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>();
+            let list = |k: &str| {
+                native::array(rule, &format!("/{k}"))
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            };
             let suffix = |sfx: &str| host == sfx || host.ends_with(&format!(".{sfx}"));
             list("domain").iter().any(|d| d == host)
                 || list("domain_suffix").iter().any(|d| suffix(d))
-                || list("domain_keyword").iter().any(|d| host.contains(d.as_str()))
+                || list("domain_keyword")
+                    .iter()
+                    .any(|d| host.contains(d.as_str()))
                 || list("process_name").iter().any(|p| p == app)
                 || list("rule_set").iter().any(|t| {
                     sets.iter().filter(|s| native::tag(s) == t).any(|s| {
                         native::array(s, "/rules").iter().any(|r| {
-                            native::array(r, "/domain_suffix").iter().filter_map(|v| v.as_str()).any(suffix)
+                            native::array(r, "/domain_suffix")
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .any(suffix)
                         })
                     })
                 })
@@ -250,7 +264,10 @@ impl Demo {
                 return rule["outbound"].as_str().unwrap_or("direct").into();
             }
         }
-        doc.pointer("/route/final").and_then(|v| v.as_str()).unwrap_or("direct").into()
+        doc.pointer("/route/final")
+            .and_then(|v| v.as_str())
+            .unwrap_or("direct")
+            .into()
     }
     fn report(&self) -> ConnectionReport {
         let mut items = self.connections.clone();
@@ -314,7 +331,10 @@ impl Demo {
             Action::ReviewApply => {
                 let mut r = reply(true, "");
                 r.config = Some(native::review(&self.store, None)?);
-                r.diff = Some(native::review::detailed(&json!({}), &config::generate(&self.store)?));
+                r.diff = Some(native::review::detailed(
+                    &json!({}),
+                    &config::generate(&self.store)?,
+                ));
                 r.confirm = Some(Action::ApplyNative {
                     revision: native::revision(&self.store),
                 });

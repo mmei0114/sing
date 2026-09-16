@@ -2690,6 +2690,7 @@ mod tests {
             api_ready: false,
             version: String::new(),
             last_sample: 0,
+            started_at: 0,
             selection_recovery: String::new(),
         }
     }
@@ -3130,6 +3131,7 @@ mod tests {
             api_ready: false,
             version: String::new(),
             last_sample: 0,
+            started_at: 0,
             selection_recovery: String::new(),
         };
         let response = m.handle(Action::Connect).await;

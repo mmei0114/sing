@@ -114,8 +114,11 @@ impl History {
                 .sort_by_key(|e| std::cmp::Reverse((e.open, e.c.created_at)));
             self.entries.truncate(LIMIT);
         }
-        self.entries
-            .sort_by(|a, b| b.c.created_at.cmp(&a.c.created_at).then(a.c.id.cmp(&b.c.id)));
+        self.entries.sort_by(|a, b| {
+            b.c.created_at
+                .cmp(&a.c.created_at)
+                .then(a.c.id.cmp(&b.c.id))
+        });
         self.index = self
             .entries
             .iter()
@@ -125,9 +128,6 @@ impl History {
     }
     pub fn clear(&mut self) {
         *self = Self::default();
-    }
-    pub fn has_process_info(&self) -> bool {
-        self.entries.iter().any(|e| e.c.process.is_some())
     }
     pub fn apps(&self) -> Vec<AppStat> {
         let mut map: BTreeMap<String, AppStat> = BTreeMap::new();
@@ -154,7 +154,11 @@ impl History {
     }
     pub fn hosts(&self, app: Option<&str>) -> Vec<HostStat> {
         let mut map: BTreeMap<String, HostStat> = BTreeMap::new();
-        for e in self.entries.iter().filter(|e| app.is_none_or(|a| e.app() == a)) {
+        for e in self
+            .entries
+            .iter()
+            .filter(|e| app.is_none_or(|a| e.app() == a))
+        {
             let host = e.host();
             let stat = map.entry(host.clone()).or_insert_with(|| HostStat {
                 host: host.clone(),
@@ -165,7 +169,11 @@ impl History {
             stat.traffic += e.total();
             if e.created() >= stat.last {
                 stat.last = e.created();
-                stat.target = e.c.chain.first().cloned().unwrap_or_else(|| e.c.outbound.clone());
+                stat.target =
+                    e.c.chain
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| e.c.outbound.clone());
                 stat.rule = e.c.rule.clone();
                 stat.sample = Some(e.c.clone());
             }
@@ -210,7 +218,10 @@ mod tests {
             ConnectionReport {
                 observed_at: 1,
                 total: 2,
-                items: vec![conn("a", "Safari", "a.example", 10, true), conn("b", "Safari", "b.example", 20, true)],
+                items: vec![
+                    conn("a", "Safari", "a.example", 10, true),
+                    conn("b", "Safari", "b.example", 20, true),
+                ],
             },
             true,
         );
@@ -229,7 +240,14 @@ mod tests {
         let safari = apps.iter().find(|a| a.name == "Safari").unwrap();
         assert_eq!((safari.connections, safari.open, safari.down), (2, 0, 180));
         assert_eq!(h.hosts(Some("Safari")).len(), 2);
-        assert_eq!(h.hosts(None).iter().find(|x| x.host == "a.example").unwrap().connections, 2);
+        assert_eq!(
+            h.hosts(None)
+                .iter()
+                .find(|x| x.host == "a.example")
+                .unwrap()
+                .connections,
+            2
+        );
     }
     #[test]
     fn hosts_strip_ports() {

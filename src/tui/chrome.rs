@@ -1,5 +1,5 @@
 //! Header tabs, hint line and the bottom control bar with the always-needed
-//! switches: Start, Mode, TUN, System Proxy and Config.
+//! switches: Start, Mode and TUN. Config and help remain utilities on the right.
 use super::{
     modal::{self, any, Choice, Confirm, Modal, Outcome, Picker},
     notify, text, theme, App, Tab,
@@ -34,25 +34,18 @@ fn spinner() -> &'static str {
 }
 
 pub fn header(f: &mut Frame, area: Rect, app: &App) {
-    let [top, rule] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+    let [top, rule] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
     let mut spans = vec![
         Span::styled(" ◆ ", theme::s(theme::accent())),
         Span::styled("sing", theme::bold(theme::text())),
         Span::raw("   "),
     ];
-    let mut underline = vec![Span::styled(
-        "─".repeat(10),
-        theme::s(theme::faint()),
-    )];
-    let mut tabs: Vec<(Tab, String)> = Tab::MAIN
+    let mut underline = vec![Span::styled("─".repeat(10), theme::s(theme::faint()))];
+    let tabs: Vec<(Tab, String)> = Tab::MAIN
         .iter()
         .enumerate()
         .map(|(i, t)| (*t, format!("{} {}", i + 1, t.name())))
         .collect();
-    if app.tab == Tab::Config {
-        tabs.push((Tab::Config, "Config".into()));
-    }
     for (tab, name) in tabs {
         let on = tab == app.tab;
         let w = text::width(&name);
@@ -92,13 +85,20 @@ pub fn header(f: &mut Frame, area: Rect, app: &App) {
         status.push(Span::styled("Running", theme::s(theme::text())));
         if s.started_at > 0 {
             status.push(Span::styled(
-                format!(" {}", text::duration(crate::model::now().saturating_sub(s.started_at))),
+                format!(
+                    " {}",
+                    text::duration(crate::model::now().saturating_sub(s.started_at))
+                ),
                 theme::s(theme::dim()),
             ));
         }
         if s.api_ready && s.status.traffic_available {
             status.push(Span::styled(
-                format!("   ↓ {}  ↑ {} ", text::rate(s.status.downlink), text::rate(s.status.uplink)),
+                format!(
+                    "   ↓ {}  ↑ {} ",
+                    text::rate(s.status.downlink),
+                    text::rate(s.status.uplink)
+                ),
                 theme::s(theme::dim()),
             ));
         } else {
@@ -172,12 +172,16 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
     };
     let tun_on = app.tun_configured();
     let tun_live = s.running_tun;
-    let mut segments = vec![
+    let segments = [
         Segment {
             key: "s",
             label: if s.connected { "Stop" } else { "Start" },
             value: String::new(),
-            color: if s.connected { theme::good() } else { theme::accent() },
+            color: if s.connected {
+                theme::good()
+            } else {
+                theme::accent()
+            },
         },
         Segment {
             key: "m",
@@ -197,31 +201,23 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
             color: if tun_on { theme::good() } else { theme::dim() },
         },
     ];
-    if cfg!(target_os = "macos") && !s.ssh {
-        let on = app.system_proxy_on();
-        segments.push(Segment {
-            key: "p",
-            label: "System Proxy",
-            value: if on { "On" } else { "Off" }.into(),
-            color: if on { theme::good() } else { theme::dim() },
-        });
-    }
-    segments.push(Segment {
-        key: ",",
-        label: "Config",
-        value: String::new(),
-        color: theme::text(),
-    });
     let compact = area.width < 96;
     let mut spans = vec![Span::styled(
         if s.connected { " ● " } else { " ○ " },
         Style::default()
-            .fg(if s.connected { theme::good() } else { theme::dim() })
+            .fg(if s.connected {
+                theme::good()
+            } else {
+                theme::dim()
+            })
             .bg(theme::panel()),
     )];
     for (i, seg) in segments.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(theme::faint()).bg(theme::panel())));
+            spans.push(Span::styled(
+                " │ ",
+                Style::default().fg(theme::faint()).bg(theme::panel()),
+            ));
         }
         spans.push(Span::styled(
             seg.key,
@@ -235,7 +231,11 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
         } else {
             seg.label
         };
-        let label_color = if seg.value.is_empty() { seg.color } else { theme::dim() };
+        let label_color = if seg.value.is_empty() {
+            seg.color
+        } else {
+            theme::dim()
+        };
         spans.push(Span::styled(
             format!(" {label}"),
             Style::default().fg(label_color).bg(theme::panel()),
@@ -255,23 +255,74 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
     if s.dirty {
         right.push(Span::styled(
             "A",
-            Style::default().fg(theme::warn()).bg(theme::panel()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::warn())
+                .bg(theme::panel())
+                .add_modifier(Modifier::BOLD),
         ));
         right.push(Span::styled(
-            if compact { " Apply " } else { " Apply changes " },
+            if compact {
+                " Apply "
+            } else {
+                " Apply changes "
+            },
             Style::default().fg(theme::warn()).bg(theme::panel()),
         ));
-        right.push(Span::styled(" │ ", Style::default().fg(theme::faint()).bg(theme::panel())));
+        right.push(Span::styled(
+            " │ ",
+            Style::default().fg(theme::faint()).bg(theme::panel()),
+        ));
     }
+    let config_on = app.tab == Tab::Config;
+    right.push(Span::styled(
+        ",",
+        Style::default()
+            .fg(theme::accent())
+            .bg(theme::panel())
+            .add_modifier(Modifier::BOLD),
+    ));
+    right.push(Span::styled(
+        " Config ",
+        Style::default()
+            .fg(if config_on {
+                theme::accent()
+            } else {
+                theme::dim()
+            })
+            .bg(theme::panel())
+            .add_modifier(if config_on {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    ));
+    right.push(Span::styled(
+        "│ ",
+        Style::default().fg(theme::faint()).bg(theme::panel()),
+    ));
     right.push(Span::styled(
         "?",
-        Style::default().fg(theme::accent()).bg(theme::panel()).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme::accent())
+            .bg(theme::panel())
+            .add_modifier(Modifier::BOLD),
     ));
-    right.push(Span::styled(" Help ", Style::default().fg(theme::dim()).bg(theme::panel())));
+    right.push(Span::styled(
+        " Help ",
+        Style::default().fg(theme::dim()).bg(theme::panel()),
+    ));
     let left_w: usize = {
         let mut w = 3;
         for (i, seg) in segments.iter().enumerate() {
-            w += if i > 0 { 3 } else { 0 } + 1 + 1 + seg.label.len() + if seg.value.is_empty() { 0 } else { 1 + seg.value.len() };
+            w += if i > 0 { 3 } else { 0 }
+                + 1
+                + 1
+                + seg.label.len()
+                + if seg.value.is_empty() {
+                    0
+                } else {
+                    1 + seg.value.len()
+                };
         }
         w
     };
@@ -360,9 +411,14 @@ pub fn toggle_tun(app: &mut App) {
                         match r.confirm.clone() {
                             Some(apply) => app.push(Confirm::new(
                                 "Restart core?",
-                                format!("{}\n\nRestarting briefly interrupts open connections.", r.message),
+                                format!(
+                                    "{}\n\nRestarting briefly interrupts open connections.",
+                                    r.message
+                                ),
                                 "Restart now",
-                                Box::new(move |app| app.request_busy(apply, "Restarting", Box::new(notify))),
+                                Box::new(move |app| {
+                                    app.request_busy(apply, "Restarting", Box::new(notify))
+                                }),
                             )),
                             None => notify(app, r),
                         }
@@ -400,7 +456,11 @@ pub struct ModeMenu {
     selected: usize,
 }
 const MODES: [(&str, &str, &str); 3] = [
-    ("rule", "Rule", "Your rules decide; unmatched traffic uses the final target"),
+    (
+        "rule",
+        "Rule",
+        "Your rules decide; unmatched traffic uses the final target",
+    ),
     ("global", "Global", "Everything goes through one proxy"),
     ("direct", "Direct", "Everything connects directly"),
 ];
@@ -460,7 +520,11 @@ impl Modal for ModeMenu {
             f,
             r,
             "Mode",
-            if app.snap.connected { "switches live" } else { "used on start" },
+            if app.snap.connected {
+                "switches live"
+            } else {
+                "used on start"
+            },
         );
         let current = &app.snap.store.settings.route_mode;
         let mut lines = vec![];
@@ -490,6 +554,11 @@ impl Modal for ModeMenu {
         f.render_widget(Paragraph::new(lines), inner);
     }
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑↓", "move"), ("enter", "switch"), ("g", "global target"), ("esc", "close")]
+        vec![
+            ("↑↓", "move"),
+            ("enter", "switch"),
+            ("g", "global target"),
+            ("esc", "close"),
+        ]
     }
 }

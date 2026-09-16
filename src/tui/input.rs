@@ -1,8 +1,8 @@
 //! Single and multi-line text input with a byte cursor on char boundaries.
-use crossterm::event::{KeyCode as K, KeyEvent, KeyModifiers as M};
-use ratatui::text::{Line, Span};
-use ratatui::style::{Modifier, Style};
 use super::{text, theme};
+use crossterm::event::{KeyCode as K, KeyEvent, KeyModifiers as M};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 #[derive(Clone)]
 pub struct Input {
@@ -88,9 +88,6 @@ impl Input {
     pub fn empty() -> Self {
         Self::new(String::new())
     }
-    pub fn set(&mut self, value: impl Into<String>) {
-        *self = Self::new(value.into());
-    }
     /// Render one line with a visible block cursor, scrolled so the cursor stays
     /// inside `max` columns. `secret` masks the value.
     pub fn line(&self, max: usize, focused: bool, secret: bool) -> Line<'static> {
@@ -106,10 +103,16 @@ impl Input {
         };
         let chars: Vec<char> = value.chars().collect();
         let before: String = chars[..cursor_chars.min(chars.len())].iter().collect();
-        let at: String = chars.get(cursor_chars).map(|c| c.to_string()).unwrap_or(" ".into());
+        let at: String = chars
+            .get(cursor_chars)
+            .map(|c| c.to_string())
+            .unwrap_or(" ".into());
         let after: String = chars.iter().skip(cursor_chars + 1).collect();
         if !focused {
-            return Line::from(Span::styled(text::fit(&value, max), theme::s(theme::text())));
+            return Line::from(Span::styled(
+                text::fit(&value, max),
+                theme::s(theme::text()),
+            ));
         }
         // Keep the tail of `before` visible.
         let room = max.saturating_sub(text::width(&at) + 1);
@@ -120,7 +123,13 @@ impl Input {
         let rest = max.saturating_sub(text::width(&shown) + text::width(&at));
         Line::from(vec![
             Span::styled(shown, theme::s(theme::text())),
-            Span::styled(at, Style::default().fg(theme::panel()).bg(theme::accent()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                at,
+                Style::default()
+                    .fg(theme::panel())
+                    .bg(theme::accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(text::fit(&after, rest), theme::s(theme::text())),
         ])
     }

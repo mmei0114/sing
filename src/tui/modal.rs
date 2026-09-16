@@ -195,7 +195,7 @@ impl Modal for Confirm {
 }
 pub fn textwrap_height(s: &str, w: usize) -> usize {
     s.lines()
-        .map(|l| (text::width(l).max(1) + w - 1) / w)
+        .map(|l| text::width(l).max(1).div_ceil(w))
         .sum::<usize>()
         .max(1)
 }
@@ -254,7 +254,11 @@ pub struct Choice {
     pub detail: String,
 }
 impl Choice {
-    pub fn new(value: impl Into<String>, label: impl Into<String>, detail: impl Into<String>) -> Self {
+    pub fn new(
+        value: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             value: value.into(),
             label: label.into(),
@@ -436,9 +440,19 @@ impl Modal for Picker {
     }
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
         if self.multi {
-            vec![("space", "toggle"), ("enter", "done"), ("type", "filter"), ("esc", "cancel")]
+            vec![
+                ("space", "toggle"),
+                ("enter", "done"),
+                ("type", "filter"),
+                ("esc", "cancel"),
+            ]
         } else {
-            vec![("↑↓", "move"), ("enter", "choose"), ("type", "filter"), ("esc", "cancel")]
+            vec![
+                ("↑↓", "move"),
+                ("enter", "choose"),
+                ("type", "filter"),
+                ("esc", "cancel"),
+            ]
         }
     }
 }
@@ -463,10 +477,6 @@ impl Prompt {
             error: String::new(),
             on_enter,
         }
-    }
-    pub fn secret(mut self) -> Self {
-        self.secret = true;
-        self
     }
 }
 impl Modal for Prompt {
@@ -567,12 +577,18 @@ impl Modal for TextArea {
     fn draw(&self, f: &mut Frame, area: Rect, _: &App) {
         let r = popup(area, area.width, area.height);
         let inner = frame(f, r, &self.title, "JSON");
-        let [body, error] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(if self.error.is_empty() { 0 } else { 2 })])
-                .areas(inner);
+        let [body, error] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(if self.error.is_empty() { 0 } else { 2 }),
+        ])
+        .areas(inner);
         let before = &self.input.value[..self.input.cursor];
         let line = before.matches('\n').count();
-        let col = before.rsplit('\n').next().map(|s| s.chars().count()).unwrap_or(0);
+        let col = before
+            .rsplit('\n')
+            .next()
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
         let height = body.height as usize;
         let top = line.saturating_sub(height.saturating_sub(1));
         let lines: Vec<Line> = self
@@ -585,7 +601,10 @@ impl Modal for TextArea {
             .map(|(i, l)| {
                 let number = Span::styled(format!("{:>4} ", i + 1), theme::s(theme::faint()));
                 if i != line {
-                    return Line::from(vec![number, Span::styled(l.to_string(), theme::s(theme::text()))]);
+                    return Line::from(vec![
+                        number,
+                        Span::styled(l.to_string(), theme::s(theme::text())),
+                    ]);
                 }
                 let chars: Vec<char> = l.chars().collect();
                 let a: String = chars[..col.min(chars.len())].iter().collect();

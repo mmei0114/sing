@@ -76,7 +76,9 @@ pub fn target(tag: &str) -> Color {
         "" => dim(),
         _ => {
             let palette = [accent(), info(), violet()];
-            let h = tag.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+            let h = tag
+                .bytes()
+                .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
             palette[(h % palette.len() as u32) as usize]
         }
     }
