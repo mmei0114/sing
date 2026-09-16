@@ -224,6 +224,7 @@ impl App {
                     .and_then(|s| s.parse::<usize>().ok())
                 {
                     self.go(page, tab);
+                    self.filter = Input::new(String::new());
                     self.selected[page] = index.min(self.rows().len().saturating_sub(1));
                     self.focus = Focus::Content;
                     self.notice = format!("Reference: {target}");
@@ -234,11 +235,13 @@ impl App {
         for (path, page, tab) in [("/route", 3, 1), ("/dns", 4, 2)] {
             if within(&target, path) {
                 self.go(page, tab);
+                self.filter = Input::new(String::new());
                 self.notice = format!("Reference: {target}");
                 return Ok(None);
             }
         }
         self.go(6, 0);
+        self.filter = Input::new(String::new());
         let root = target.split('/').nth(1).unwrap_or("");
         self.selected[6] = self
             .rows()

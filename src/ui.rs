@@ -3,9 +3,12 @@ mod forms;
 mod group;
 mod links;
 mod navigation;
+mod observations;
 mod rule_import;
 mod subscriptions;
 mod view;
+#[cfg(test)]
+mod visual_tests;
 use crate::{
     api, config, model,
     native::{self, Edit},
@@ -25,7 +28,7 @@ use ratatui::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{self, IsTerminal},
     path::PathBuf,
     sync::mpsc,
@@ -124,7 +127,7 @@ enum Dialog {
         after: Option<Box<Dialog>>,
     },
     Commands {
-        choices: Vec<navigation::Button>,
+        choices: Vec<navigation::PaletteItem>,
         query: Input,
         selected: usize,
     },
@@ -167,6 +170,7 @@ struct App {
     control: usize,
     selected: [usize; 12],
     tabs: [usize; 12],
+    locations: HashMap<(usize, usize), (usize, String)>,
     filter: Input,
     searching: bool,
     dialog: Option<Dialog>,
@@ -176,6 +180,12 @@ struct App {
     error: bool,
     busy: bool,
     connections: runtime::ConnectionReport,
+    pending_connections: Option<runtime::ConnectionReport>,
+    connections_paused: bool,
+    connection_error: String,
+    snapshot_at: u64,
+    probe_stale: bool,
+    refresh_requested: bool,
     show_closed: bool,
     quit: bool,
     demo: bool,
@@ -190,6 +200,7 @@ impl App {
             control: 0,
             selected: [0; 12],
             tabs: [0; 12],
+            locations: HashMap::new(),
             filter: Input::new(String::new()),
             searching: false,
             dialog: None,
@@ -199,6 +210,12 @@ impl App {
             error: false,
             busy: false,
             connections: Default::default(),
+            pending_connections: None,
+            connections_paused: false,
+            connection_error: String::new(),
+            snapshot_at: model::now(),
+            probe_stale: false,
+            refresh_requested: true,
             show_closed: false,
             quit: false,
             demo,
@@ -252,7 +269,7 @@ impl App {
         let all:Vec<_>=match self.page{
         0=>native::array(&doc,"/outbounds").iter().enumerate().filter(|(_,v)|v["type"]=="selector"||v["type"]=="urltest").map(|(i,v)|(i,self.label(native::tag(v)),v.clone())).collect(),
         5 if self.tabs[5]==0=>self.snapshot.store.subscriptions.iter().enumerate().map(|(i,s)|(i,format!("{} · {}",s.name,s.format),json!({"name":s.name,"source":s.source,"updated_at":s.updated_at,"warnings":s.warnings}))).collect(),
-        7=>self.connections.items.iter().enumerate().filter(|(_,c)|self.show_closed||c.closed_at==0).map(|(i,c)|(i,format!("{} → {} {}",if c.domain.is_empty(){&c.destination}else{&c.domain},c.outbound,if c.closed_at==0{""}else{"[closed]"}),serde_json::to_value(c).unwrap())).collect(),
+        7=>self.connection_rows().iter().enumerate().map(|(i,c)|(i,format!("{} → {} {}",observations::destination(c),observations::path(self,c),if c.closed_at==0{""}else{"[closed]"}),serde_json::to_value(c).unwrap())).collect(),
         3 if self.tabs[3]==1=>vec![(0,"Routing options".into(),doc["route"].clone())],4 if self.tabs[4]==2=>vec![(0,"DNS options".into(),doc["dns"].clone())],
         6=>doc.as_object().map(|m|m.iter().filter(|(k,_)|!["inbounds","outbounds","route","dns"].contains(&k.as_str())).enumerate().map(|(i,(k,v))|(i,k.clone(),v.clone())).collect()).unwrap_or_default(),
         _=>native::array(&doc,self.path()).iter().enumerate().map(|(i,v)|{let label=if self.page==2{self.snapshot.store.nodes.iter().find(|n|n.tag()==native::tag(v)).map(|n|format!("{} · {} · {}",n.name,n.kind(),n.server())).unwrap_or_else(||format!("{} · {}",self.label(native::tag(v)),text(&v["type"])))}else if self.page==5&&self.tabs[5]==1&&!native::tag(v).is_empty(){format!("{} · {}",self.label(native::tag(v)),text(&v["type"]))}else{title(v)};let delay=if self.page==2{self.snapshot.groups.group.iter().flat_map(|g|g.items.iter()).filter(|m|m.tag==native::tag(v)&&m.delay>0).max_by_key(|m|m.time).map(|m|format!(" · {} ms",m.delay)).unwrap_or_default()}else{String::new()};(i,format!("{label}{delay}"),v.clone())}).collect()};
@@ -440,10 +457,7 @@ impl App {
     fn receive(&mut self, r: Reply) -> Result<Option<Action>> {
         self.busy = false;
         if let Some(s) = r.snapshot {
-            self.snapshot = s;
-            if !self.snapshot.connected {
-                self.connections = Default::default();
-            }
+            self.observe_snapshot(s);
         }
         if !r.ok {
             self.failed(r.message);
@@ -470,7 +484,7 @@ impl App {
             return Ok(None);
         }
         if let Some(c) = r.connections {
-            self.connections = c;
+            self.observe_connections(c);
         }
         if let Some(edit) = r.edit {
             match self.intent.take().unwrap_or(Intent::Raw) {
@@ -1039,15 +1053,20 @@ impl App {
             } => {
                 let filtered: Vec<_> = choices
                     .iter()
-                    .filter(|(name, _)| name.to_lowercase().contains(&query.value.to_lowercase()))
-                    .copied()
+                    .filter(|item| {
+                        item.label
+                            .to_lowercase()
+                            .contains(&query.value.to_lowercase())
+                    })
                     .collect();
                 match k.code {
                     K::Down => *selected = (*selected + 1).min(filtered.len().saturating_sub(1)),
                     K::Up => *selected = selected.saturating_sub(1),
                     K::Enter => {
-                        if let Some((_, command)) = filtered.get(*selected) {
-                            return self.activate(*command);
+                        if let Some(item) = filtered.get(*selected) {
+                            if self.unavailable(item.command).is_none() {
+                                return self.activate(item.command);
+                            }
                         }
                     }
                     _ => {
@@ -1246,11 +1265,15 @@ impl App {
             }
             return Ok(None);
         }
+        if let Some(action) = self.observation_key(k) {
+            return Ok(action);
+        }
         if let Some(action) = self.navigation_key(k)? {
             return Ok(action);
         }
         let s = &self.snapshot.store;
         match k.code{
+            K::Char('I')=>self.import(false),
             K::Char(':')=>return self.activate(Command::Actions),
             K::Char('q')=>self.quit=true,K::Char('?')=>self.note("Help",view::help(),None),
             K::Char('c') if !self.snapshot.connected=>return Ok(Some(if s.native.is_none(){Action::ReviewMigration}else{Action::ReviewApply})),
@@ -1259,13 +1282,13 @@ impl App {
             K::Char('M')=>self.settings_form(false,true),
             K::Char('i') if self.page==0||self.page==10=>self.note("Install verified core?",format!("Download sing-box {} from SagerNet; no system installation.",runtime::CORE_VERSION),Some(Action::InstallCore)),
             K::Char('u') if s.native.is_none()=>return Ok(Some(Action::ReviewMigration)),
-            K::Char('v') if self.page==0=>self.note("Check HTTPS connectivity?","Send an explicit HTTPS request through the local mixed proxy to gstatic. Not a speed test.".into(),Some(Action::Probe)),
+            K::Char('v') if self.page==0=>{ensure!(self.snapshot.connected,"Start the core before testing a connection");self.note("Check HTTPS connectivity?","Send an explicit HTTPS request through the local mixed proxy to www.gstatic.com/generate_204. Not a speed test.".into(),Some(Action::Probe));},
             K::Char('R')=>self.note("Restore system proxy?","Restore sing-owned settings without stopping the core.".into(),Some(Action::RestoreProxy)),
             K::Char('p')=>return Ok(Some(Action::Preview)),K::Char('V')=>return Ok(Some(Action::Check)),
             K::Char('b') if self.page==6=>self.note("Restore previous applied state?","Restore the previous complete state and restart the core.".into(),Some(Action::Rollback)),
             K::Char('/')=>self.searching=true,K::Esc=>self.filter=Input::new(String::new()),
             K::Down|K::Char('j')=>self.selected[self.page]=(self.selected[self.page]+1).min(self.rows().len().saturating_sub(1)),K::Up|K::Char('k')=>self.selected[self.page]=self.selected[self.page].saturating_sub(1),
-            K::Char('a') if self.page==0||(self.page==5&&self.tabs[5]==0)=>self.import(false),K::Char('C') if self.page==5&&self.tabs[5]==1=>return Ok(Some(self.open("/route".into(),Intent::RuleImport))),
+            K::Char('a') if self.page==0||(self.page==5&&self.tabs[5]==0)=>self.import(false),K::Char('C') if self.page==3||(self.page==5&&self.tabs[5]==1)=>return Ok(Some(self.open("/route".into(),Intent::RuleImport))),
             K::Char('g') if self.page==2=>{ensure!(s.native.is_some(),"Initialize native configuration on Overview (u)");return Ok(Some(self.open("/outbounds/-".into(),Intent::Group)));},
             K::Char('a') if [1,2,3,4,5].contains(&self.page)=>{ensure!(s.native.is_some(),"Initialize native configuration on Overview (u)");let choices=templates(self.path());ensure!(!choices.is_empty(),"Edit Options instead");self.dialog=Some(Dialog::Add{choices,selected:0});},
             K::Char('s') if self.page==1||self.page==11=>self.settings_form(true,false),K::Char('e') if self.page==10=>self.settings_form(false,false),
@@ -1285,7 +1308,7 @@ impl App {
             K::Char('r') if self.page==5=>{let(i,_,v)=self.current().context("Select a resource")?;return Ok(if self.tabs[5]==0{Some(Action::Refresh(s.subscriptions[i].id.clone()))}else{s.rule_resources.iter().find(|r|r.tag()==native::tag(&v)).map(|r|Action::RefreshRules(r.id.clone()))});},
             K::Char('t') if self.page==2=>{let(_,_,v)=self.current().context("Select an outbound")?;return Ok(Some(Action::Test(native::tag(&v).into())));},
             K::Char('r') if self.page==7=>return Ok(Some(Action::Connections)),K::Char('h') if self.page==7=>self.show_closed = !self.show_closed,
-            K::Char('x') if self.page==7=>{let(i,_,_)=self.current().context("Select a connection")?;let c=&self.connections.items[i];let id=c.id.clone();let detail=format!("{} → {}",c.source,c.destination);self.note("Close connection?",detail,Some(Action::CloseConnection(id)));},
+            K::Char('x') if self.page==7=>{let(_,_,v)=self.current().context("Select a connection")?;let c:api::Connection=serde_json::from_value(v)?;let detail=format!("{} → {}",c.source,c.destination);self.note("Close connection?",detail,Some(Action::CloseConnection(c.id)));},
             K::Char('r') if self.page==8=>return Ok(Some(Action::Logs)),K::Char('r') if self.page==9=>return Ok(Some(Action::Diagnostics)),_=>{}
         }
         Ok(None)
@@ -1330,21 +1353,21 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
     };
     ensure!(demo||snap.manager_protocol>=9,"Old manager detected. Close old interfaces, run ./sing --shutdown, then reopen ./sing. Shutdown stops the old core; saved data remains intact.");
     let mut a = App::new(snap, demo);
-    let (tx, rx) = mpsc::channel::<Action>();
-    let (out, results) = mpsc::channel::<Result<Reply>>();
+    let (tx, rx) = mpsc::channel::<(Action, bool)>();
+    let (out, results) = mpsc::channel::<(Result<Reply>, bool)>();
     let worker = dir.clone();
     std::thread::spawn(move || {
-        for action in rx {
-            let polling = matches!(action, Action::Snapshot);
+        for (action, background) in rx {
+            let snapshot_only = matches!(action, Action::Snapshot);
             let mut r = runtime::request(&worker, action);
-            if !polling {
+            if !snapshot_only {
                 if let Ok(r) = &mut r {
                     if let Ok(s) = runtime::request(&worker, Action::Snapshot) {
                         r.snapshot = s.snapshot;
                     }
                 }
             }
-            if out.send(r).is_err() {
+            if out.send((r, background)).is_err() {
                 break;
             }
         }
@@ -1357,12 +1380,23 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
     enter()?;
     let _guard = Guard;
     let mut term = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let mut last = Instant::now();
+    let mut last = Instant::now() - Duration::from_secs(3);
+    let mut polling = false;
     let mut redraw = true;
+    let mut painted_second = model::now();
     while !a.quit {
-        let mut action = None;
-        while let Ok(r) = results.try_recv() {
+        if painted_second != model::now() {
+            painted_second = model::now();
             redraw = true;
+        }
+        let mut action = None;
+        while let Ok((r, background)) = results.try_recv() {
+            redraw = true;
+            if background {
+                polling = false;
+                a.receive_poll(r);
+                continue;
+            }
             match r {
                 Ok(r) => match a.receive(r) {
                     Ok(next) => action = next,
@@ -1443,17 +1477,25 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
                 demo_action(&mut a, action)?;
             } else {
                 a.busy = true;
-                tx.send(action)?;
+                tx.send((action, false))?;
                 last = Instant::now();
             }
-        } else if !demo && !a.busy && a.dialog.is_none() && last.elapsed() > Duration::from_secs(2)
+        } else if !demo
+            && !a.busy
+            && !polling
+            && a.dialog.is_none()
+            && (a.refresh_requested || last.elapsed() > Duration::from_secs(2))
         {
-            a.busy = true;
-            tx.send(if a.page == 7 {
-                Action::Connections
-            } else {
-                Action::Snapshot
-            })?;
+            polling = true;
+            a.refresh_requested = false;
+            tx.send((
+                if a.page == 7 || a.page == 0 {
+                    Action::Connections
+                } else {
+                    Action::Snapshot
+                },
+                true,
+            ))?;
             last = Instant::now();
         }
     }
@@ -1464,6 +1506,7 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
 }
 fn demo_action(a: &mut App, action: Action) -> Result<()> {
     match action {
+        Action::Connections => {}
         Action::ConnectionSetupInfo => demo_action(a, Action::ReadNative(String::new()))?,
         Action::ReviewConnectionSetup(change) => {
             let s = native::connection_setup(
@@ -1618,13 +1661,8 @@ mod tests {
         assert!(group.name.value.is_empty());
         assert!(!group.automatic);
         a.key(KeyEvent::new(K::Esc, M::NONE)).unwrap();
-        a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
-        a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
-        a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
-        a.key(KeyEvent::new(K::Right, M::NONE)).unwrap();
+        a.key(KeyEvent::new(K::Char('3'), M::NONE)).unwrap();
         assert_eq!(a.page, 3);
-        assert_eq!(a.focus, Focus::Navigation);
-        a.key(KeyEvent::new(K::Enter, M::NONE)).unwrap();
         assert_eq!(a.focus, Focus::Content);
         assert_eq!(a.doc(), before);
     }
@@ -1649,10 +1687,10 @@ mod tests {
             let mut a = App::new(sample().unwrap(), true);
             let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
             for (page, tab, hint) in [
-                (0, 0, "[Import Subscription]"),
-                (2, 0, "[New Group]"),
-                (5, 0, "[Import Subscription]"),
-                (5, 1, "[Import Rule Set]"),
+                (0, 0, "v Test Connection"),
+                (2, 0, "g New Group"),
+                (5, 0, "I Import Subscription"),
+                (5, 1, "C Import Rule Set"),
             ] {
                 a.page = page;
                 a.tabs[page] = tab;
@@ -1667,7 +1705,8 @@ mod tests {
                 let rendered = lines.join("\n");
                 assert!(rendered.contains(hint), "{w}x{h}: {hint}");
                 assert!(lines[..5].join("\n").contains("Overview"));
-                assert!(lines[..5].join("\n").contains("[Settings]"));
+                assert!(!lines[..5].join("\n").contains(", Settings"));
+                assert!(lines[lines.len() - 2..].join("\n").contains(", Settings"));
                 assert!(rendered.contains("Quit"));
             }
         }
@@ -1729,7 +1768,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(rendered.contains("TUN  Off"));
+        assert!(rendered.contains("TUN             Off"));
         a.snapshot.running_tun = true;
         t.draw(|f| view::draw(f, &a)).unwrap();
         let rendered = t
@@ -1739,7 +1778,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(rendered.contains("TUN  Running"));
+        assert!(rendered.contains("TUN             Running"));
     }
     #[test]
     fn apply_review_has_visible_diff_back_and_explicit_apply() {
@@ -1827,6 +1866,8 @@ mod tests {
         a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
         a.key(KeyEvent::new(K::Tab, M::NONE)).unwrap();
         a.key(KeyEvent::new(K::Down, M::NONE)).unwrap();
+        assert_eq!(a.page, 0);
+        a.key(KeyEvent::new(K::Char('2'), M::NONE)).unwrap();
         assert_eq!(a.page, 2);
     }
     #[test]

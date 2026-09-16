@@ -1,5 +1,19 @@
 # 设计依据
 
+## Overview / Connections / Actions 实施依据
+
+- 用户明确否决 Fallback / Global target 等首页出口摘要；保留可快速切换的组列表。连接窗展示内核实际报告的域名/IP、outbound、chain、rule，不从当前草稿或当前组选择反推历史连接路径。
+- 现有 API Connection 已含目的地址、domain、outbound、chain、rule、process；后台返回最新最多 500 条采样，不是完整访问历史。复用同一报告/详情，不持久保存访问记录。
+- 当前 Overview 没有子页但布局 min(1) 强制占空行；More 与 Actions 均调用同一菜单。主页动作应按首次配置/日常运行分开，主要入口按任务选择，不机械取前三项。
+- 现有轮询复用 busy/receive 会锁按键，并可能触碰 retry/intent；本次区分后台只读更新与前台事务回复。正在阅读的连接固定显示快照，更新保留在内存等待恢复；离线/API 失败明确标记，不伪装实时。
+
+## 2026-09-16 — 操作与美学复审
+
+- 实际代码/80×24 Demo：状态、全局动作、一级导航、子导航、页面动作占据顶部；永久两行通知和 clean Review 另占底部。Tab 从 Content 经 Review、Global、Navigation、Subnavigation、Actions 才返回；Settings 虽已有逗号直达，入口却不显示键位。go() 每次清掉选择和过滤条件。
+- 参考官方资料：Yazi https://yazi-rs.github.io/docs/quick-start/ 的键盘操作与帮助；Lazygit https://github.com/jesseduffield/lazygit/blob/master/docs/keybindings/Keybindings_en.md 的面板直达；Harlequin https://harlequin.sh/docs/bindings 的按任务聚焦。借鉴原则，不宣称照搬其视觉布局。
+- 本产品方向：安静的终端控制台。位置/状态在上，工作内容居中，稳定的全局控制在下；用对齐、空白、字重和单一强调色区分层级，减少方括号与嵌套边框。快捷键显式展示，不能以隐藏所有动作换取“极简”。
+- 保持 core/API/capture/check 的证据区别；草稿不等于生效，停止仍需确认。终端审查仅使用虚构数据，不改真实后台与网络。
+
 ## 2026-09-16 — 公开发布与 README
 
 - GitHub API 实际登录身份为 mmei0114（沙箱内 gh auth status 的失败不能当作真实鉴权结论）；既有三个仓库不受影响，sing 名称经读取确认未占用。用户确认新仓库 sing / MIT。Cargo 原已有 MIT 元数据，本次补齐许可全文。

@@ -148,6 +148,7 @@ impl Manager {
             .select_confirmed(group.clone(), member.clone())
             .await?;
         self.groups = groups;
+        self.connectivity = ProbeStatus::default();
         memory.insert(group, Remembered { member, default });
         if let Err(e) = save(&self.dir, &memory) {
             bail!("Selection is API-confirmed, but could not remember it for restart: {e}");

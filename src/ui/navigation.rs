@@ -4,14 +4,12 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Focus {
     Global,
-    Navigation,
-    Subnavigation,
     Actions,
     Content,
-    Review,
+    Connections,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Command {
     Key(char),
     Open(usize, usize),
@@ -26,8 +24,15 @@ pub(super) enum Command {
     Select,
     Tun,
     Actions,
+    Observe,
 }
 pub(super) type Button = (&'static str, Command);
+#[derive(Clone)]
+pub(super) struct PaletteItem {
+    pub section: &'static str,
+    pub label: &'static str,
+    pub command: Command,
+}
 
 impl App {
     // Editor IDs are internal; the five workspaces are the public navigation model.
@@ -70,12 +75,27 @@ impl App {
             .unwrap_or(if self.page == 2 { 1 } else { 0 })
     }
     pub(super) fn go(&mut self, page: usize, tab: usize) -> Option<Action> {
+        self.resume_connections();
+        let previous = (self.page, self.tabs[self.page]);
+        if previous != (page, tab) {
+            self.locations.insert(
+                previous,
+                (self.selected[self.page], self.filter.value.clone()),
+            );
+            let (selected, filter) = self
+                .locations
+                .get(&(page, tab))
+                .cloned()
+                .unwrap_or_default();
+            self.selected[page] = selected;
+            self.filter = Input::new(filter);
+        }
         self.page = page;
         self.tabs[page] = tab;
-        self.selected[page] = 0;
-        self.filter = Input::new(String::new());
+        self.selected[page] = self.selected[page].min(self.rows().len().saturating_sub(1));
         self.control = 0;
-        (page == 7).then_some(Action::Connections)
+        self.refresh_requested = true;
+        None
     }
     fn go_workspace(&mut self, workspace: usize) -> Option<Action> {
         let (page, tab) = [(0, 0), (2, 0), (3, 0), (11, 0), (7, 0)][workspace];
@@ -91,17 +111,93 @@ impl App {
                 },
                 Command::Key(if self.snapshot.connected { 'd' } else { 'c' }),
             ),
-            ("Rule / Global / Direct", Command::Key('M')),
+            ("Mode", Command::Key('M')),
             ("Settings", Command::Open(10, 0)),
+            ("Review", Command::Key('A')),
             ("Help", Command::Key('?')),
             ("Actions", Command::Actions),
         ]
     }
     pub(super) fn buttons(&self) -> Vec<Button> {
-        let mut buttons = self.all_buttons();
-        if buttons.len() > 5 {
-            buttons.truncate(4);
-            buttons.push(("More", Command::Actions));
+        use Command::*;
+        let mut buttons = match (self.page, self.tabs[self.page]) {
+            (0, _) if self.onboarding() => {
+                vec![("Import Subscription", Import), ("Connection Setup", Setup)]
+            }
+            (0, _) => vec![
+                ("Test Connection", Key('v')),
+                ("Capture Settings", Open(11, 0)),
+                ("Diagnostics", Open(9, 0)),
+            ],
+            (2, 0) => vec![
+                ("Import Subscription", Import),
+                ("New Group", Group),
+                ("Select Member", Select),
+            ],
+            (2, _) => vec![
+                ("Import Subscription", Import),
+                ("Test", Key('t')),
+                ("Edit", Key('e')),
+            ],
+            (5, 0) => vec![
+                ("Import Subscription", Import),
+                ("Update", Key('r')),
+                ("Update All", UpdateAll),
+            ],
+            (3, 0) => vec![
+                ("Add Rule", Key('a')),
+                ("Import Rule Set", Convert),
+                ("Edit", Key('e')),
+            ],
+            (5, _) => vec![
+                ("Import Rule Set", Convert),
+                ("Edit", Key('e')),
+                ("Update Converted", Key('r')),
+            ],
+            (11, _) => vec![
+                ("System Proxy", Key('s')),
+                ("Configure TUN", Tun),
+                ("Restore System Proxy", Key('R')),
+            ],
+            (1, _) => vec![
+                ("Add Inbound", Key('a')),
+                ("Edit", Key('e')),
+                ("Details", Details),
+            ],
+            (4, tab) => {
+                if tab < 2 {
+                    vec![
+                        (
+                            if tab == 0 {
+                                "Add Server"
+                            } else {
+                                "Add DNS Rule"
+                            },
+                            Key('a'),
+                        ),
+                        ("Edit", Key('e')),
+                        ("Details", Details),
+                    ]
+                } else {
+                    vec![("Edit Options", Key('e')), ("Native JSON", Key('E'))]
+                }
+            }
+            (7, _) => vec![
+                ("Refresh", Key('r')),
+                ("Details", Details),
+                ("Include Closed", Key('h')),
+            ],
+            _ => self
+                .all_buttons()
+                .into_iter()
+                .filter(|(_, c)| !matches!(c, References | Back))
+                .collect(),
+        };
+        if self.page == 0 && self.snapshot.version.is_empty() {
+            buttons.insert(0, ("Install Core", Key('i')));
+        }
+        if !self.history.is_empty() {
+            buttons.insert(0, ("Back to References", Back));
         }
         buttons
     }
@@ -115,6 +211,8 @@ impl App {
                     ("Change Proxy", Open(2, 0)),
                     ("Capture", Open(11, 0)),
                     ("Test Connection", Key('v')),
+                    ("Connections", Observe),
+                    ("Diagnostics", Open(9, 0)),
                 ];
                 if self.snapshot.store.native.is_none() {
                     buttons.push(("Initialize Config", Key('u')));
@@ -179,11 +277,7 @@ impl App {
                 ("Remove", Key('x')),
             ],
             (4, _) => {
-                let mut b = vec![
-                    ("Servers", Open(4, 0)),
-                    ("Rules", Open(4, 1)),
-                    ("Options", Open(4, 2)),
-                ];
+                let mut b = vec![];
                 if self.tabs[4] < 2 {
                     b.push((
                         if self.tabs[4] == 0 {
@@ -205,6 +299,11 @@ impl App {
                 if self.tabs[4] == 1 {
                     b.extend([("Move Up", Key('K')), ("Move Down", Key('J'))]);
                 }
+                b.extend([
+                    ("Servers", Open(4, 0)),
+                    ("Rules", Open(4, 1)),
+                    ("Options", Open(4, 2)),
+                ]);
                 b
             }
             (7, _) => vec![
@@ -241,8 +340,16 @@ impl App {
         buttons
     }
     pub(super) fn activate(&mut self, command: Command) -> Result<Option<Action>> {
+        if let Some(reason) = self.unavailable(command) {
+            self.notice = reason.into();
+            return Ok(None);
+        }
         self.focus = Focus::Content;
         match command {
+            Command::Observe => {
+                self.focus = Focus::Connections;
+                Ok(None)
+            }
             Command::References => {
                 self.reference_browser()?;
                 Ok(None)
@@ -271,6 +378,16 @@ impl App {
                 self.key(KeyEvent::new(K::Char('g'), M::NONE))
             }
             Command::Details => {
+                if self.page == 7 {
+                    if let Some(c) = self.connection_rows().get(self.selected[7]) {
+                        self.note(
+                            "Connection · observed details",
+                            observations::details(self, c),
+                            None,
+                        );
+                    }
+                    return Ok(None);
+                }
                 if let Some((_, name, value)) = self.current() {
                     self.note(&name, view::details(self, &value), None);
                 }
@@ -283,26 +400,7 @@ impl App {
                 self.key(KeyEvent::new(K::Enter, M::NONE))
             }
             Command::Actions => {
-                let mut choices = self.all_buttons();
-                choices.extend(
-                    self.global_buttons()
-                        .into_iter()
-                        .filter(|(_, c)| !matches!(c, Command::Actions)),
-                );
-                choices.extend([
-                    ("Subscriptions", Command::Open(5, 0)),
-                    ("Connection Setup", Command::Setup),
-                    ("Proxy Groups", Command::Open(2, 0)),
-                    ("Rules", Command::Open(3, 0)),
-                    ("Rule Sets", Command::Open(5, 1)),
-                    ("Capture", Command::Open(11, 0)),
-                    ("Inbounds", Command::Open(1, 0)),
-                    ("DNS", Command::Open(4, 0)),
-                    ("Connections", Command::Open(7, 0)),
-                    ("Logs", Command::Open(8, 0)),
-                    ("Diagnostics", Command::Open(9, 0)),
-                    ("Advanced Tools", Command::Open(6, 0)),
-                ]);
+                let choices = self.palette();
                 self.dialog = Some(Dialog::Commands {
                     choices,
                     query: Input::new(String::new()),
@@ -340,27 +438,101 @@ impl App {
             }
         }
     }
+    pub(super) fn palette(&self) -> Vec<PaletteItem> {
+        use Command::*;
+        let mut choices: Vec<PaletteItem> = vec![];
+        for (section, buttons) in [
+            ("This Page", self.all_buttons()),
+            (
+                "Go To",
+                vec![
+                    ("Overview", Open(0, 0)),
+                    ("Subscriptions", Open(5, 0)),
+                    ("Proxy Groups", Open(2, 0)),
+                    ("Nodes", Open(2, 1)),
+                    ("Rules", Open(3, 0)),
+                    ("Rule Sets", Open(5, 1)),
+                    ("Capture", Open(11, 0)),
+                    ("Inbounds", Open(1, 0)),
+                    ("DNS", Open(4, 0)),
+                    ("All Connections", Open(7, 0)),
+                    ("Logs", Open(8, 0)),
+                    ("Diagnostics", Open(9, 0)),
+                    ("Advanced Tools", Open(6, 0)),
+                ],
+            ),
+            ("Application", {
+                let mut b = self.global_buttons();
+                b.extend([
+                    ("Import Subscription", Import),
+                    ("Connection Setup", Setup),
+                    ("Quit Interface", Key('q')),
+                ]);
+                b
+            }),
+        ] {
+            for (label, command) in buttons {
+                if command != Actions && !choices.iter().any(|item| item.command == command) {
+                    choices.push(PaletteItem {
+                        section,
+                        label,
+                        command,
+                    });
+                }
+            }
+        }
+        choices
+    }
+    pub(super) fn unavailable(&self, command: Command) -> Option<&'static str> {
+        use Command::*;
+        match command {
+            Key('v' | 't') if !self.snapshot.connected => Some("Start the core first"),
+            Key('r' | 'x') | Details
+                if self.page == 7 && self.current().is_none() && command != Key('r') =>
+            {
+                Some("Select a connection")
+            }
+            Select
+                if !self
+                    .current()
+                    .is_some_and(|(_, _, v)| v["type"] == "selector") =>
+            {
+                Some("Select a manual group")
+            }
+            Details | Key('e' | 'x' | 't' | 'J' | 'K')
+                if [1, 2, 5].contains(&self.page) && self.current().is_none() =>
+            {
+                Some("Select an object")
+            }
+            Details | Key('e' | 'x' | 'J' | 'K')
+                if ((self.page == 3 && self.tabs[3] == 0)
+                    || (self.page == 4 && self.tabs[4] < 2))
+                    && self.current().is_none() =>
+            {
+                Some("Select an object")
+            }
+            Key('r') if self.page == 5 && self.current().is_none() => Some("Select a resource"),
+            UpdateAll if self.snapshot.store.subscriptions.is_empty() => Some("No subscriptions"),
+            _ => None,
+        }
+    }
     // None means the key belongs to the content/editor, not navigation.
     pub(super) fn navigation_key(&mut self, key: KeyEvent) -> Result<Option<Option<Action>>> {
-        if matches!(key.code, K::Tab | K::BackTab) {
-            let mut order = vec![
-                Focus::Content,
-                Focus::Review,
-                Focus::Global,
-                Focus::Navigation,
-            ];
-            if !self.destinations().is_empty() {
-                order.push(Focus::Subnavigation);
-            }
-            if !self.buttons().is_empty() {
-                order.push(Focus::Actions);
-            }
-            let i = order.iter().position(|f| *f == self.focus).unwrap_or(0);
-            self.focus = order[(i + if key.code == K::Tab {
-                1
+        if key.code == K::F(6) {
+            self.focus = if self.focus == Focus::Global {
+                Focus::Content
             } else {
-                order.len() - 1
-            }) % order.len()];
+                Focus::Global
+            };
+            self.control = 0;
+            return Ok(Some(None));
+        }
+        if matches!(key.code, K::Tab | K::BackTab) {
+            self.focus = if self.focus == Focus::Content && !self.buttons().is_empty() {
+                Focus::Actions
+            } else {
+                Focus::Content
+            };
             self.control = 0;
             return Ok(Some(None));
         }
@@ -370,49 +542,35 @@ impl App {
             return Ok(Some(action));
         }
         if key.code == K::Char(',') {
+            self.focus = Focus::Content;
             return Ok(Some(self.go(10, 0)));
         }
         if key.code == K::Esc && self.focus != Focus::Content {
             self.focus = Focus::Content;
             return Ok(Some(None));
         }
+        if self.focus == Focus::Content && self.page == 4 && matches!(key.code, K::Left | K::Right)
+        {
+            let tab = (self.tabs[4] + if key.code == K::Right { 1 } else { 2 }) % 3;
+            return Ok(Some(self.go(4, tab)));
+        }
         let movement = match key.code {
             K::Left | K::Up => Some(false),
             K::Right | K::Down => Some(true),
             _ => None,
         };
-        if self.focus == Focus::Navigation {
-            if let Some(forward) = movement {
-                let i = self.workspace().min(4);
-                return Ok(Some(self.go_workspace(if forward {
-                    (i + 1) % 5
-                } else {
-                    (i + 4) % 5
-                })));
-            }
-            if key.code == K::Enter {
-                self.focus = Focus::Content;
-                return Ok(Some(None));
-            }
-        }
-        if (self.focus == Focus::Subnavigation && movement.is_some())
-            || matches!(key.code, K::Char('[' | ']'))
-        {
+        if matches!(key.code, K::Char('[' | ']')) {
             let d = self.destinations();
             if !d.is_empty() {
-                let forward = movement.unwrap_or(key.code == K::Char(']'));
+                let forward = key.code == K::Char(']');
                 let n = (self.subtab() + if forward { 1 } else { d.len() - 1 }) % d.len();
+                self.focus = Focus::Content;
                 return Ok(Some(self.go(d[n].1, d[n].2)));
             }
         }
-        if self.focus == Focus::Subnavigation && key.code == K::Enter {
-            self.focus = Focus::Content;
-            return Ok(Some(None));
-        }
-        if matches!(self.focus, Focus::Global | Focus::Actions | Focus::Review) {
+        if matches!(self.focus, Focus::Global | Focus::Actions) {
             let b = match self.focus {
                 Focus::Global => self.global_buttons(),
-                Focus::Review => vec![("Review", Command::Key('A'))],
                 _ => self.buttons(),
             };
             if let Some(forward) = movement {
@@ -442,6 +600,41 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn one_categorized_palette_no_more_alias_and_no_duplicate_commands() {
+        let mut app = App::new(sample().unwrap(), true);
+        for page in 0..12 {
+            app.go(page, 0);
+            assert!(app
+                .buttons()
+                .iter()
+                .all(|(label, c)| *label != "More" && *c != Command::Actions));
+            let palette = app.palette();
+            for (i, item) in palette.iter().enumerate() {
+                assert!(!palette[..i]
+                    .iter()
+                    .any(|other| other.command == item.command));
+            }
+            assert!(palette.iter().any(|c| c.section == "Go To"));
+            assert!(palette.iter().any(|c| c.section == "Application"));
+        }
+    }
+    #[test]
+    fn overview_actions_follow_native_readiness_not_subscription_presence() {
+        let mut app = App::new(sample().unwrap(), true);
+        app.snapshot.store.nodes.clear();
+        app.snapshot.store.subscriptions.clear();
+        app.snapshot.store.native = Some(
+            json!({"inbounds":[{"type":"mixed","listen_port":2080}],"outbounds":[{"type":"direct","tag":"direct"}]}),
+        );
+        assert!(!app.onboarding());
+        assert_eq!(app.buttons()[0].0, "Test Connection");
+        assert!(app.unavailable(Command::Key('v')).is_some());
+        app.snapshot.store.native = None;
+        assert!(app.onboarding());
+        assert_eq!(app.buttons()[0].0, "Import Subscription");
+        assert!(app.palette().iter().any(|i| i.command == Command::Setup));
+    }
     fn press(app: &mut App, code: K) -> Option<Action> {
         app.key(KeyEvent::new(code, M::NONE)).unwrap()
     }
@@ -453,6 +646,108 @@ mod tests {
             press(app, K::Tab);
         }
         panic!("Actions must be reachable with Tab");
+    }
+    #[test]
+    fn tab_is_local_and_global_controls_are_one_key_away() {
+        let mut app = App::new(sample().unwrap(), true);
+        for workspace in '1'..='5' {
+            press(&mut app, K::Char(workspace));
+            press(&mut app, K::Tab);
+            assert_eq!(app.focus, Focus::Actions);
+            press(&mut app, K::Tab);
+            assert_eq!(app.focus, Focus::Content);
+            press(&mut app, K::BackTab);
+            assert_eq!(app.focus, Focus::Actions);
+            press(&mut app, K::F(6));
+            assert_eq!(app.focus, Focus::Global);
+            press(&mut app, K::Right);
+            press(&mut app, K::Right);
+            assert_eq!(app.global_buttons()[app.control].0, "Settings");
+            press(&mut app, K::Esc);
+            assert_eq!(app.focus, Focus::Content);
+        }
+        press(&mut app, K::Char(','));
+        assert_eq!(app.page, 10);
+        assert_eq!(app.focus, Focus::Content);
+        press(&mut app, K::Char('M'));
+        assert!(matches!(app.dialog, Some(Dialog::Form(_))));
+    }
+    #[test]
+    fn destinations_remember_their_own_filter_and_selection_and_clamp_after_changes() {
+        let mut app = App::new(sample().unwrap(), true);
+        app.go(2, 1);
+        app.filter = Input::new("o".into());
+        let last = app.rows().len().saturating_sub(1);
+        assert!(last > 0);
+        app.selected[2] = last;
+        app.go(2, 0);
+        assert!(app.filter.value.is_empty());
+        assert_eq!(app.selected[2], 0);
+        app.go(5, 0);
+        app.filter = Input::new("subscription".into());
+        app.go(5, 1);
+        assert!(app.filter.value.is_empty());
+        app.go(2, 1);
+        assert_eq!(app.filter.value, "o");
+        assert_eq!(app.selected[2], last);
+        app.go(3, 0);
+        app.snapshot.store.native.as_mut().unwrap()["outbounds"] = json!([]);
+        app.go(2, 1);
+        assert_eq!(app.selected[2], 0);
+        app.go(5, 0);
+        assert_eq!(app.filter.value, "subscription");
+    }
+    #[test]
+    fn shortcuts_never_escape_text_entry_and_stop_remains_a_confirmation() {
+        let mut app = App::new(sample().unwrap(), true);
+        press(&mut app, K::Char('I'));
+        for c in "cMd,A?:I123[]q".chars() {
+            assert!(press(&mut app, K::Char(c)).is_none());
+        }
+        press(&mut app, K::F(6));
+        let Some(Dialog::Form(form)) = &app.dialog else {
+            panic!()
+        };
+        assert_eq!(form.fields[form.selected].input.value, "cMd,A?:I123[]q");
+        assert!(!app.quit);
+        app.dialog = None;
+        press(&mut app, K::Char('/'));
+        for c in "cMd,A?:I123[]q".chars() {
+            assert!(press(&mut app, K::Char(c)).is_none());
+        }
+        press(&mut app, K::F(6));
+        assert_eq!(app.focus, Focus::Content);
+        assert_eq!(app.filter.value, "cMd,A?:I123[]q");
+        press(&mut app, K::Esc);
+        press(&mut app, K::Char('d'));
+        assert!(matches!(
+            app.dialog,
+            Some(Dialog::Text {
+                action: Some(Action::Disconnect),
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn dns_tabs_are_local_and_add_stays_visible() {
+        let mut app = App::new(sample().unwrap(), true);
+        let before = app.doc();
+        app.go(4, 0);
+        assert_eq!(app.buttons()[0].0, "Add Server");
+        press(&mut app, K::Right);
+        assert_eq!(app.path(), "/dns/rules");
+        assert_eq!(app.buttons()[0].0, "Add DNS Rule");
+        press(&mut app, K::Right);
+        assert_eq!(app.path(), "/dns");
+        press(&mut app, K::Left);
+        assert_eq!(app.path(), "/dns/rules");
+        press(&mut app, K::Tab);
+        press(&mut app, K::Right);
+        assert_eq!(app.path(), "/dns/rules");
+        assert_eq!(app.control, 1);
+        press(&mut app, K::Char('['));
+        assert_eq!(app.page, 1);
+        assert_eq!(app.doc(), before);
     }
     #[test]
     fn five_workspaces_map_to_existing_objects_without_mutation() {
@@ -488,6 +783,7 @@ mod tests {
     #[test]
     fn familiar_import_buttons_work_with_tab_and_enter_and_input_is_not_navigation() {
         let mut app = App::new(sample().unwrap(), true);
+        app.snapshot.store.native = None;
         focus_actions(&mut app);
         assert_eq!(app.buttons()[0].0, "Import Subscription");
         press(&mut app, K::Enter);
@@ -507,6 +803,7 @@ mod tests {
             matches!(press(&mut app,K::Enter),Some(Action::Import{source,..}) if source=="12345")
         );
         app.retry = None;
+        app.snapshot = sample().unwrap();
         press(&mut app, K::Char('3'));
         focus_actions(&mut app);
         press(&mut app, K::Right);

@@ -1,6 +1,6 @@
 # sing 正式客户端产品规格 v1
 
-日期：2026-09-15；更新：2026-09-16。源码基线：0.5.1，当前本地交付：0.6.0。M1/M2 代码流程与隔离验证已落地，M3 部分依赖及 M4 平台/用户验收仍未完成。逐项范围见 acceptance-0.6.0.md 与 progress.md，发布不等同完整目标验收。
+日期：2026-09-15；更新：2026-09-16。源码基线：0.5.1，公开版本：0.6.0；当前界面修订：0.6.1-dev（未发布）。M1/M2 代码流程与隔离验证已落地，M3 部分依赖及 M4 平台/用户验收仍未完成。逐项范围见 acceptance-0.6.0.md 与 progress.md，发布不等同完整目标验收。
 
 本文取代 product-research-2026-09-15.md 的六页导航和独立原型建议，以及后续讨论中的三分区侧栏建议。旧研究仅作为素材，不作为实现指令。冲突时按用户最新明确指示 > 本规格 > 历史文档处理。
 
@@ -31,7 +31,7 @@
 - Proxies：Proxy Groups / Nodes / Subscriptions 三个标签直接可见；更新在 Subscriptions 内，支持 Update / Update All 并展示变化。
 - 组详情：当前成员、候选成员、延迟、Test、Edit Members；选节点和编辑节点不是同一动作。
 - Routing：Rules / Rule Sets；Import Rule Set 包含目标绑定；默认目标位于规则列表语境中。
-- 顶部全局控件：Rule / Global / Direct 和 Start / Stop。Overview/Network 的相关快捷入口操纵同一状态，不复制另一套配置值。
+- 底部全局控件：Start / Stop、Mode、Settings、Review、Help、Actions，旁显键位；Mode 打开 Rule / Global / Direct。Overview/Network 的相关快捷入口操纵同一状态，不复制另一套配置值。
 - Overview 可直接进入 System Proxy / TUN / Proxy Ports 的接管选择；详细配置归 Network。TUN 不作为所有平台/SSH 的无条件默认。
 - Network：DNS 标签直接可见；Activity：Connections 和 Logs 标签直接可见。
 - 不用 Resources、Pipeline、Workspace 等自创分类替换用户熟悉的入口；tag/outbound/detour 在专家层仍能找到。
@@ -82,9 +82,10 @@ Import Rule Set → URL → 格式与转换预览 → Send Matching Traffic To �
 
 ## 5. 统一交互与视觉
 
-- 顶部固定主机/运行状态、接管摘要、模式、连接控制与 Settings；中部工作区；底部 Review 状态与少量上下文操作。狭窄时状态缩短/折叠，不隐藏核心操作。
+- 顶部固定主机/运行状态、模式与草稿标记，再放五工作区和子导航；中部工作内容；底部固定带键位的全局控制，上方一行上下文提示。接管证据集中在 Overview / Capture，避免顶部挤满等权文字。空通知不占行，错误仍保留。
 - 页面布局：标题与可聚焦主操作 → 可见子导航/搜索 → 列表与详情。宽屏并排；80×24 采用列表进入详情、Esc 返回；详情保留滚动与焦点。
-- Tab/Shift+Tab 移动焦点、方向键选择、Space 勾选、Enter 执行当前明确动作、Esc 返回/取消。数字直达主工作区仅在非文本输入语境使用。快捷键不得截获正在输入的字符。
+- Tab/Shift+Tab 只在内容与本页动作间切换；F6 直达底栏；1–5 直达工作区、方括号切子页，DNS 内容区左右切 Servers/Rules/Options。方向键选择、Space 勾选、Enter 执行明确动作、Esc 返回/取消。表单内仍按字段顺序 Tab；任何全局键不得截获输入，弹窗与筛选时底栏标明暂停。
+- 切页记住每个 page/tab 的过滤与行选择，回到已删除行时夹到合法范围。引用跳转清理目标过滤，返回保留原上下文。视觉用克制的深色底、单一薄荷强调色、对齐与分隔线；选中导航、键盘焦点和实际运行选择不是同一种状态。
 - 所有主要任务用可见控件完成，鼠标可选，键盘独立完成。Actions 搜索提供专家快速跳转和低频动作，不取代主要按钮，也不要求用户先背命令。
 - 进入组详情与选中成员是不同焦点上下文；选节点不打开编辑器，测速不替手动组切换。
 - 确认值、焦点、当前运行值、未应用草稿用不同文字/符号标记，不只依赖颜色。API 断开/未知/检查过期不展示成绿色已验证。

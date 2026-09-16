@@ -1,18 +1,72 @@
 use super::*;
+mod overview;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
+    },
     Frame,
 };
 const ACCENT: Color = Color::Rgb(114, 216, 191);
 const MUTED: Color = Color::Rgb(135, 151, 169);
+const BACKGROUND: Color = Color::Rgb(17, 23, 30);
+const SURFACE: Color = Color::Rgb(26, 35, 44);
+const BORDER: Color = Color::Rgb(56, 72, 88);
 fn block(title: &str) -> Block<'_> {
     Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .title(format!(" {title} "))
-        .border_style(Style::default().fg(Color::Rgb(56, 72, 88)))
+        .border_style(Style::default().fg(BORDER))
+}
+fn section(title: &str) -> Block<'_> {
+    Block::default()
+        .borders(Borders::TOP)
+        .padding(Padding::horizontal(1))
+        .title(format!(" {title} "))
+        .title_style(
+            Style::default()
+                .fg(Color::Rgb(218, 226, 233))
+                .add_modifier(Modifier::BOLD),
+        )
+        .border_style(Style::default().fg(BORDER))
+}
+fn rate(bytes: i64) -> String {
+    let bytes = bytes.max(0) as f64;
+    if bytes >= 1_048_576.0 {
+        format!("{:.1} MiB/s", bytes / 1_048_576.0)
+    } else if bytes >= 1024.0 {
+        format!("{:.1} KiB/s", bytes / 1024.0)
+    } else {
+        format!("{bytes:.0} B/s")
+    }
+}
+fn group_member(a: &App, group: &Value) -> String {
+    if a.snapshot.connected {
+        if !a.snapshot.api_ready {
+            return "Unknown · API unavailable".into();
+        }
+        a.snapshot
+            .groups
+            .group
+            .iter()
+            .find(|g| g.tag == native::tag(group))
+            .map(|g| a.label(&g.selected))
+            .unwrap_or_else(|| "Unknown".into())
+    } else {
+        group["default"]
+            .as_str()
+            .map(|s| a.label(s))
+            .unwrap_or_else(|| "Automatic / first member".into())
+    }
+}
+fn fact(label: &str, value: impl Into<String>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<16}"), Style::default().fg(MUTED)),
+        Span::raw(value.into()),
+    ])
 }
 pub(super) fn details(a: &App, v: &Value) -> String {
     let display = |key: &str| {
@@ -26,6 +80,9 @@ pub(super) fn details(a: &App, v: &Value) -> String {
         }
     };
     if a.page == 7 {
+        if let Ok(connection) = serde_json::from_value(v.clone()) {
+            return observations::details(a, &connection);
+        }
         let process = v
             .pointer("/process/path")
             .and_then(Value::as_str)
@@ -119,16 +176,20 @@ pub(super) fn help() -> String {
     [
         "Navigation",
         "1–5: Overview / Proxies / Routing / Network / Activity",
-        "Tab / Shift+Tab: focus controls, navigation, actions, content, Review",
+        "Tab / Shift+Tab: switch between content and page actions",
+        "F6: focus bottom controls / return to content; Esc: return",
         "Arrow keys: choose   Enter: open / execute   Esc: return",
         "[ / ]: previous / next subpage   ,: Settings   /: filter",
         "",
         "Common tasks",
-        "Import Subscription: Overview or Proxies",
+        "I: Import Subscription from any page",
         "New Group: Proxies / Proxy Groups",
-        "Import Rule Set: Routing; includes target selection",
-        "DNS: Network / DNS; Servers, Rules and Options share one editor",
+        "C: Import Rule Set in Routing; includes target selection",
+        "DNS: Network / DNS; Left/Right switches Servers / Rules / Options",
         "System Proxy / TUN: Network / Capture",
+        "Overview: l focuses Connections; arrows browse, Enter details, Esc returns",
+        "Browsing pauses the displayed sample; r returns to live sampling",
+        ": Actions: This Page / Go To / Application; type to search",
         "Connections / Logs / Diagnostics: Activity",
         "",
         "Editing",
@@ -155,9 +216,9 @@ fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
     let mut used = 0;
     for (i, page) in PAGES.iter().enumerate() {
         let label = if width < 65 {
-            format!(" {page} ")
+            format!("{} {page} ", i + 1)
         } else {
-            format!(" {} {page} ", i + 1)
+            format!(" {} {page}  ", i + 1)
         };
         let size = label.len() as u16;
         if used + size > width && !spans.is_empty() {
@@ -166,23 +227,100 @@ fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
         }
         let style = if i == a.workspace() {
             Style::default()
-                .bg(ACCENT)
-                .fg(Color::Rgb(17, 23, 30))
-                .add_modifier(Modifier::BOLD)
+                .fg(ACCENT)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(MUTED)
         };
+        spans.push(Span::styled(label, style));
+        used += size;
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+// Chrome uses quiet, explicit key hints; form buttons remain conventional buttons.
+fn controls(
+    a: &App,
+    buttons: &[navigation::Button],
+    focus: Option<usize>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![];
+    let mut spans = vec![];
+    let mut used = 0;
+    for (i, (label, command)) in buttons.iter().enumerate() {
+        let key = match command {
+            Command::Key(c) => c.to_string(),
+            Command::Open(10, 0) => ",".into(),
+            Command::Import => "I".into(),
+            Command::Group => "g".into(),
+            Command::Convert => "C".into(),
+            Command::Select | Command::Details => "Enter".into(),
+            Command::Actions => ":".into(),
+            Command::Observe => "l".into(),
+            _ => String::new(),
+        };
+        let size = label.len() + if key.is_empty() { 0 } else { key.len() + 1 } + 2;
+        if used + size > width as usize && !spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        let selected = focus == Some(i);
+        let style = if selected {
+            Style::default()
+                .fg(BACKGROUND)
+                .bg(ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else if a.unavailable(*command).is_some() {
+            Style::default().fg(MUTED).add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+        };
+        if !key.is_empty() {
+            spans.push(Span::styled(
+                format!("{key} "),
+                if selected {
+                    style
+                } else {
+                    Style::default().fg(ACCENT)
+                },
+            ));
+        }
+        spans.push(Span::styled(label.to_string(), style));
+        spans.push(Span::raw("  "));
+        used += size;
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+fn subnavigation(a: &App, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![];
+    let mut spans = vec![];
+    let mut used = 0;
+    for (i, (label, _, _)) in a.destinations().iter().enumerate() {
+        let size = label.len() + 3;
+        if used + size > width as usize && !spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
         spans.push(Span::styled(
-            label,
-            if a.focus == Focus::Navigation {
-                style.add_modifier(Modifier::UNDERLINED)
+            format!(" {label}  "),
+            if i == a.subtab() {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
             } else {
-                style
+                Style::default().fg(MUTED)
             },
         ));
         used += size;
     }
     if !spans.is_empty() {
+        if used + 5 <= width as usize {
+            spans.push(Span::styled("[ / ]", Style::default().fg(MUTED)));
+        }
         lines.push(Line::from(spans));
     }
     lines
@@ -225,7 +363,7 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
     f.render_widget(
         Block::default().style(
             Style::default()
-                .bg(Color::Rgb(17, 23, 30))
+                .bg(BACKGROUND)
                 .fg(Color::Rgb(218, 226, 233)),
         ),
         area,
@@ -238,34 +376,38 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         return;
     }
     let tabs = navigation(a, area.width);
-    let global = button_lines(
+    let global = controls(
+        a,
         &a.global_buttons(),
         (a.focus == Focus::Global).then_some(a.control),
-        area.width,
+        area.width.saturating_sub(2),
     );
-    let actions = button_lines(
+    let actions = controls(
+        a,
         &a.buttons(),
         (a.focus == Focus::Actions).then_some(a.control),
-        area.width,
+        area.width.saturating_sub(2),
     );
-    let subnav: Vec<_> = a
-        .destinations()
-        .into_iter()
-        .map(|(label, p, t)| (label, Command::Open(p, t)))
-        .collect();
-    let subnav_lines = button_lines(&subnav, Some(a.subtab()), area.width);
+    let subnav_lines = subnavigation(a, area.width);
+    let notice = if a.searching {
+        format!("/{}", a.filter.value)
+    } else if a.busy {
+        "Working…".into()
+    } else {
+        model::clean(&a.notice)
+    };
+    let notice_height = if notice.is_empty() { 0 } else { 2 };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(global.len() as u16),
             Constraint::Length(tabs.len() as u16),
             Constraint::Length(subnav_lines.len() as u16),
-            Constraint::Length(actions.len() as u16),
+            Constraint::Length(actions.len().max(1) as u16),
             Constraint::Min(5),
-            Constraint::Length(2),
+            Constraint::Length(notice_height),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(global.len() as u16 + 1),
         ])
         .split(area);
     let state = if a.snapshot.system_proxy.pending_restore {
@@ -276,12 +418,6 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         "API UNAVAILABLE"
     } else {
         "STOPPED"
-    };
-    let capture = match (a.snapshot.system_proxy.effective, a.snapshot.running_tun) {
-        (true, true) => "System + TUN",
-        (true, false) => "System verified",
-        (false, true) => "TUN",
-        _ => "Ports / no takeover",
     };
     let mode = if a.snapshot.connected {
         a.snapshot
@@ -298,126 +434,63 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 " sing  ",
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(
-                "{}{} · {state} · {capture} · {mode}{}{}",
-                model::clean(&a.snapshot.host)
-                    .chars()
-                    .take(18)
-                    .collect::<String>(),
-                if a.snapshot.ssh { " [SSH]" } else { "" },
-                if a.snapshot.dirty {
-                    " · Draft changed"
+            Span::styled(
+                if a.demo {
+                    "DEMO  ".into()
+                } else if area.width >= 80 {
+                    format!(
+                        "{}{}  ",
+                        model::clean(&a.snapshot.host)
+                            .chars()
+                            .take(16)
+                            .collect::<String>(),
+                        if a.snapshot.ssh { " [SSH]" } else { "" }
+                    )
+                } else if a.snapshot.ssh {
+                    "SSH  ".into()
                 } else {
-                    ""
+                    String::new()
                 },
-                if a.demo { " · DEMO" } else { "" }
-            )),
-        ])),
+                Style::default().fg(MUTED),
+            ),
+            Span::styled(
+                state,
+                Style::default().fg(if a.snapshot.system_proxy.pending_restore {
+                    Color::LightRed
+                } else if a.snapshot.connected && a.snapshot.api_ready {
+                    ACCENT
+                } else {
+                    MUTED
+                }),
+            ),
+            Span::raw(format!(" · {mode}  ")),
+            Span::styled(
+                if a.snapshot.dirty {
+                    "Draft · A Review"
+                } else {
+                    "Saved"
+                },
+                Style::default().fg(if a.snapshot.dirty {
+                    Color::Yellow
+                } else {
+                    MUTED
+                }),
+            ),
+        ]))
+        .style(Style::default().bg(SURFACE)),
         rows[0],
     );
-    f.render_widget(Paragraph::new(global), rows[1]);
-    f.render_widget(Paragraph::new(tabs), rows[2]);
+    f.render_widget(Paragraph::new(tabs), rows[1]);
+    f.render_widget(Paragraph::new(subnav_lines), rows[2]);
     f.render_widget(
-        Paragraph::new(subnav_lines).style(if a.focus == Focus::Subnavigation {
-            Style::default().add_modifier(Modifier::UNDERLINED)
-        } else {
-            Style::default()
-        }),
+        Paragraph::new(actions).block(Block::default().padding(Padding::horizontal(1))),
         rows[3],
     );
-    f.render_widget(Paragraph::new(actions), rows[4]);
-    let content = rows[5];
+    let content = rows[4];
     if a.page == 0 {
-        let s = &a.snapshot;
-        let doc = a.doc();
-        let live = s.running_settings.as_ref();
-        let mut lines = vec![
-            format!(
-                "Core  {}",
-                if s.version.is_empty() {
-                    "Not installed"
-                } else {
-                    &s.version
-                }
-            ),
-            format!(
-                "Routing  {}",
-                live.map(|v| v.route_mode.as_str())
-                    .unwrap_or(s.store.settings.route_mode.as_str())
-            ),
-            format!(
-                "System proxy  {}",
-                if s.system_proxy.effective {
-                    "Verified"
-                } else if s.system_proxy.configured {
-                    "Configured; not verified"
-                } else {
-                    "Off"
-                }
-            ),
-            format!(
-                "TUN  {}",
-                if s.connected {
-                    if s.running_tun {
-                        "Running"
-                    } else {
-                        "Off"
-                    }
-                } else if native::uses_tun(&s.store) {
-                    "Configured in draft"
-                } else {
-                    "Off"
-                }
-            ),
-            format!("Internet check  {}", s.connectivity.state),
-            format!(
-                "Traffic  ↑ {} B/s  ↓ {} B/s",
-                s.status.uplink, s.status.downlink
-            ),
-            String::new(),
-        ];
-        if !s.selection_recovery.is_empty() {
-            lines.push(s.selection_recovery.clone());
-        }
-        if s.store.native.is_none() {
-            lines.push("Native configuration upgrade is ready.".into());
-            lines.push("u  Review upgrade · original state will be backed up".into());
-        } else {
-            let count = content.height.saturating_sub(12).max(1) as usize;
-            for (index, g) in native::array(&doc, "/outbounds")
-                .iter()
-                .filter(|v| v["type"] == "selector" || v["type"] == "urltest")
-                .enumerate()
-                .skip(a.selected[0].saturating_sub(count - 1))
-                .take(count)
-            {
-                let member = if s.connected {
-                    s.groups
-                        .group
-                        .iter()
-                        .find(|live| live.tag == native::tag(g))
-                        .map(|g| g.selected.as_str())
-                        .unwrap_or("Unknown")
-                } else {
-                    g["default"].as_str().unwrap_or("Automatic / first member")
-                };
-                lines.push(format!(
-                    "{} {} → {}",
-                    if index == a.selected[0] { "›" } else { " " },
-                    a.label(native::tag(g)),
-                    a.label(member)
-                ));
-            }
-            if s.store.nodes.is_empty() {
-                lines.push("\nImport Subscription to add your first nodes.".into());
-            }
-        }
-        f.render_widget(
-            Paragraph::new(lines.join("\n"))
-                .wrap(Wrap { trim: false })
-                .block(block("Overview")),
-            content,
-        );
+        overview::draw(f, a, content);
+    } else if a.page == 7 {
+        overview::connections(f, a, content, true);
     } else if a.page == 8 {
         f.render_widget(
             Paragraph::new(
@@ -430,21 +503,21 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
-            .block(block("Activity · r core logs")),
+            .block(section("Activity · r core logs")),
             content,
         );
     } else if a.page == 9 {
-        f.render_widget(Paragraph::new("r  Inspect native references and saved / running configuration\n\nThis report does not measure network performance.").wrap(Wrap{trim:false}).block(block("Diagnostics")),content);
+        f.render_widget(Paragraph::new("r  Inspect native references and saved / running configuration\n\nThis report does not measure network performance.").wrap(Wrap{trim:false}).block(section("Diagnostics")),content);
     } else if a.page == 10 {
         let message = match a.tabs[10] {
             0 => format!("Core  {}\nVersion  {}\n\nInstall a verified core or choose an existing binary.\nInstallation does not start the proxy.", a.snapshot.core, a.snapshot.version),
-            1 => "Language  English\nKeyboard  Tab to focus, Enter to open\nLayout  Adaptive list and details\n\nNames from subscriptions keep their original language.".into(),
+            1 => "Language  English\nKeyboard  Tab for page actions; F6 for bottom controls\nNavigation  1–5 workspaces; [ / ] subpages\nLayout  Adaptive list and details\n\nNames from subscriptions keep their original language.".into(),
             _ => format!("Host  {}{}\n\nClosing this interface leaves the running core active.\nStop restores sing-owned proxy settings before stopping.\n\nNetwork configuration is under Network.", a.snapshot.host, if a.snapshot.ssh { " (remote host over SSH)" } else { "" }),
         };
         f.render_widget(
             Paragraph::new(message)
                 .wrap(Wrap { trim: false })
-                .block(block("Settings")),
+                .block(section("Settings")),
             content,
         );
     } else if a.page == 11 {
@@ -459,7 +532,7 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         f.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: false })
-                .block(block("Capture")),
+                .block(section("Capture")),
             content,
         );
     } else {
@@ -500,8 +573,33 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 }
             )
         };
-        let mut inner = block(&heading).inner(content);
-        f.render_widget(block(&heading), content);
+        let panel = if a.page == 4 {
+            let mut title = vec![Span::raw(" DNS  ")];
+            for (i, name) in ["Servers", "Rules", "Options"].iter().enumerate() {
+                title.push(Span::styled(
+                    format!(" {name} "),
+                    if a.tabs[4] == i {
+                        Style::default()
+                            .fg(ACCENT)
+                            .add_modifier(Modifier::UNDERLINED)
+                    } else {
+                        Style::default().fg(MUTED)
+                    },
+                ));
+            }
+            title.push(Span::styled(" ← / → ", Style::default().fg(MUTED)));
+            if !a.filter.value.is_empty() {
+                title.push(Span::styled(
+                    format!("Filter: {} ", model::clean(&a.filter.value)),
+                    Style::default().fg(MUTED),
+                ));
+            }
+            section("").title(Line::from(title))
+        } else {
+            section(&heading)
+        };
+        let mut inner = panel.inner(content);
+        f.render_widget(panel, content);
         if a.page == 3 && a.tabs[3] == 0 && inner.height > 0 {
             let default = a
                 .doc()
@@ -531,7 +629,40 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
             List::new(
                 items
                     .iter()
-                    .map(|(_, label, _)| ListItem::new(model::clean(label)))
+                    .map(|(_, label, value)| {
+                        if a.page == 2 && a.tabs[2] == 0 {
+                            ListItem::new(vec![
+                                Line::from(vec![
+                                    Span::styled(
+                                        model::clean(&a.label(native::tag(value))),
+                                        Style::default().add_modifier(Modifier::BOLD),
+                                    ),
+                                    Span::styled(
+                                        format!(
+                                            "   {} · {} members",
+                                            text(&value["type"]),
+                                            native::array(value, "/outbounds").len()
+                                        ),
+                                        Style::default().fg(MUTED),
+                                    ),
+                                ]),
+                                Line::styled(
+                                    model::clean(&format!(
+                                        "  {} → {}",
+                                        if a.snapshot.connected {
+                                            "Current"
+                                        } else {
+                                            "Default"
+                                        },
+                                        group_member(a, value)
+                                    )),
+                                    Style::default().fg(MUTED),
+                                ),
+                            ])
+                        } else {
+                            ListItem::new(model::clean(label))
+                        }
+                    })
                     .collect::<Vec<_>>(),
             )
             .highlight_style(Style::default().bg(Color::Rgb(33, 53, 60)).fg(
@@ -569,56 +700,90 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 f.render_widget(
                     Paragraph::new(details(a, &v))
                         .wrap(Wrap { trim: false })
-                        .block(block(if a.page == 7 {
-                            "Observation · Enter details"
-                        } else {
-                            "Details · e form · E native"
-                        })),
+                        .block(
+                            Block::default()
+                                .borders(Borders::LEFT)
+                                .padding(Padding::horizontal(1))
+                                .border_style(Style::default().fg(BORDER))
+                                .title(if a.page == 7 {
+                                    "Observation · Enter details"
+                                } else {
+                                    "Details · e form · E native"
+                                }),
+                        ),
                     split[1],
                 );
             }
         }
     }
-    let notice = if a.searching {
-        format!("/{}", a.filter.value)
-    } else if a.busy {
-        "Working…".into()
-    } else {
-        model::clean(&a.notice)
-    };
     f.render_widget(
         Paragraph::new(notice)
             .style(Style::default().fg(if a.error { Color::LightRed } else { MUTED }))
             .wrap(Wrap { trim: false }),
+        rows[5],
+    );
+    f.render_widget(
+        Paragraph::new(if a.focus == Focus::Global {
+            " ←→ Choose  Enter Open  Esc Back  q Quit"
+        } else if a.focus == Focus::Actions {
+            " ←→ Choose  Enter Open  Tab Content  q Quit"
+        } else if a.focus == Focus::Connections {
+            " ↑↓ Browse  Enter Details  r Live  Esc Groups  q Quit"
+        } else if area.width < 70 {
+            " Tab Actions  F6 Controls  / Filter  q Quit"
+        } else {
+            " ↑↓ Select  Enter Open  / Filter  Tab Actions  F6 Controls  q Quit"
+        })
+        .style(Style::default().fg(MUTED)),
         rows[6],
     );
     f.render_widget(
-        Paragraph::new(format!(
-            "{}   [Review Changes]",
-            if a.snapshot.dirty {
-                "Draft changes · not applied"
-            } else {
-                "No pending configuration changes"
-            }
-        ))
-        .style(if a.focus == Focus::Review {
-            Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED)
+        Paragraph::new(if a.dialog.is_some() {
+            vec![Line::styled(
+                "Dialog open · Esc Back · global shortcuts paused",
+                Style::default().fg(MUTED),
+            )]
+        } else if a.searching {
+            vec![Line::styled(
+                "Filtering · Enter / Esc Finish · type to search",
+                Style::default().fg(MUTED),
+            )]
         } else {
-            Style::default().fg(MUTED)
-        }),
+            global
+        })
+        .style(Style::default().bg(SURFACE))
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(BORDER))
+                .padding(Padding::horizontal(1)),
+        ),
         rows[7],
     );
-    f.render_widget(
-        Paragraph::new(" Tab Focus  Enter Open  / Search  ? Help  q Quit")
-            .style(Style::default().fg(MUTED)),
-        rows[8],
-    );
     if let Some(d) = &a.dialog {
+        f.buffer_mut()
+            .set_style(area, Style::default().add_modifier(Modifier::DIM));
+        let available_width = if content.width >= 70 {
+            content.width - 4
+        } else {
+            content.width
+        };
+        let available_height = rows[5].y.saturating_sub(rows[2].y);
+        let compact = match d {
+            Dialog::Form(form) if matches!(form.action, FormAction::Import { .. }) => {
+                Some((76, form.visible_fields() as u16 * 2 + 8))
+            }
+            Dialog::Select { choices, .. } => Some((76, choices.len().min(16) as u16 + 4)),
+            Dialog::Commands { .. } => Some((86, 18)),
+            _ => None,
+        };
+        let width = available_width.min(compact.map_or(104, |c| c.0));
+        let height = available_height.min(compact.map_or(available_height, |c| c.1));
         let dialog_area = Rect::new(
-            content.x,
-            rows[3].y,
-            content.width,
-            rows[6].y.saturating_sub(rows[3].y),
+            content.x + (content.width - width) / 2,
+            rows[2].y + (available_height - height) / 2,
+            width,
+            height,
         );
         draw_dialog(f, d, dialog_area, Some(a));
     }
@@ -626,6 +791,10 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
 pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&App>) {
     let label = |s: &str| app.map_or_else(|| s.to_string(), |a| a.label(s));
     f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(SURFACE).fg(Color::Rgb(218, 226, 233))),
+        area,
+    );
     if let Dialog::Form(form) = d {
         if matches!(form.action, FormAction::Import { .. }) {
             super::subscriptions::draw_source(f, form, area);
@@ -713,7 +882,7 @@ pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&Ap
             f.render_widget(Clear,rows[1]);f.render_widget(Paragraph::new(" Tab Focus  ←→ Target / Position\n Enter Action  Esc Back").style(Style::default().fg(ACCENT)),rows[1]);
         },
         Dialog::Discard{..}=>f.render_widget(Paragraph::new("Discard unsaved changes?\n\nEnter Discard · Esc Keep editing").block(block("Unsaved Changes")),rows[0]),
-        Dialog::Commands{choices,query,selected}=>draw_choices(f,&format!("Actions · {}",query.value),choices.iter().filter(|(name,_)|name.to_lowercase().contains(&query.value.to_lowercase())).map(|(name,_)|name.to_string()).collect(),*selected,rows[0]),
+        Dialog::Commands{choices,query,selected}=>draw_palette(f,choices,query,*selected,rows[0],app),
         Dialog::Text{title,text,scroll,..}=>f.render_widget(Paragraph::new(text.as_str()).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block(title)),rows[0]),
         Dialog::Form(form)=>{let inner=block(&form.title).inner(rows[0]);f.render_widget(block(&form.title),rows[0]);let visible=(inner.height as usize/2).max(1);let start=form.selected.saturating_sub(visible-1);let mut lines=vec![];for(i,field)in form.fields.iter().enumerate().skip(start).take(visible){lines.push(Line::styled(format!("{} {}",if i==form.selected{"›"}else{" "},field.label),Style::default().fg(if i==form.selected{ACCENT}else{MUTED})));let value=if ["source","url"].contains(&field.key.as_str())&&!field.input.value.is_empty(){"[private value · Ctrl+U to replace]".into()}else{if matches!(field.kind,Kind::Choice(_)){label(&field.input.value)}else if matches!(field.kind,Kind::Members(_)){serde_json::from_str::<Vec<String>>(&field.input.value).unwrap_or_default().iter().map(|s|label(s)).collect::<Vec<_>>().join(", ")}else{model::clean(&field.input.value)}};lines.push(Line::raw(format!("  {}",if value.is_empty(){"(default / omitted)"}else{&value})));}f.render_widget(Paragraph::new(lines),inner);},
         Dialog::Json{edit,input}=>{let b=block(if edit.pointer.is_empty(){"Native document · credentials visible"}else{&edit.pointer});let inner=b.inner(rows[0]);f.render_widget(b,rows[0]);let line=input.value[..input.cursor].bytes().filter(|c|*c==b'\n').count();let col=input.value[..input.cursor].rsplit('\n').next().unwrap_or("").chars().count();let sy=line.saturating_sub(inner.height.saturating_sub(1)as usize);let sx=col.saturating_sub(inner.width.saturating_sub(1)as usize);f.render_widget(Paragraph::new(input.value.as_str()).scroll((sy as u16,sx as u16)),inner);f.set_cursor_position((inner.x+(col-sx)as u16,inner.y+(line-sy)as u16));},
@@ -722,6 +891,63 @@ pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&Ap
         Dialog::Select{group,choices,selected}=>draw_choices(f,&label(group),choices.iter().map(|s|label(s)).collect(),*selected,rows[0]),
         Dialog::Auth{kind,..}=>f.render_widget(Paragraph::new(format!("Administrator authorization: {kind}\n\nEnter opens sudo. sing never receives your password.\nEsc cancels without enabling takeover.")).wrap(Wrap{trim:false}).block(block("Authorization")),rows[0]),
     }
+}
+fn draw_palette(
+    f: &mut Frame,
+    choices: &[navigation::PaletteItem],
+    query: &Input,
+    selected: usize,
+    area: Rect,
+    app: Option<&App>,
+) {
+    let mut items = vec![];
+    let mut previous = "";
+    let mut visual_selected = 0;
+    for (i, item) in choices
+        .iter()
+        .filter(|item| {
+            item.label
+                .to_lowercase()
+                .contains(&query.value.to_lowercase())
+        })
+        .enumerate()
+    {
+        if previous != item.section {
+            items.push(ListItem::new(Line::styled(
+                item.section,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )));
+            previous = item.section;
+        }
+        if i == selected {
+            visual_selected = items.len();
+        }
+        let reason = app.and_then(|app| app.unavailable(item.command));
+        items.push(
+            ListItem::new(format!(
+                "  {}{}",
+                item.label,
+                reason.map(|s| format!(" · {s}")).unwrap_or_default()
+            ))
+            .style(if reason.is_some() {
+                Style::default().fg(MUTED)
+            } else {
+                Style::default()
+            }),
+        );
+    }
+    if items.is_empty() {
+        items.push(ListItem::new("No matching actions"));
+    }
+    let mut state = ListState::default().with_selected(Some(visual_selected));
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block(&format!("Actions · {}", query.value)))
+            .highlight_symbol("› ")
+            .highlight_style(Style::default().bg(Color::Rgb(33, 53, 60))),
+        area,
+        &mut state,
+    );
 }
 fn draw_choices(f: &mut Frame, title: &str, choices: Vec<String>, selected: usize, area: Rect) {
     let mut s = ListState::default().with_selected(Some(selected));

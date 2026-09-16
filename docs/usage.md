@@ -102,12 +102,14 @@ Import does not change DNS. One native rule set can be used by both Route and DN
 ## Navigation and editing
 
 - `1`–`5`: the five workspaces. `,`: Settings.
-- `Tab` / `Shift+Tab`: move focus between visible controls. Arrows choose; Enter activates. Text fields take precedence over global shortcuts.
+- `Tab` / `Shift+Tab`: switch between content and page actions. `F6` focuses the bottom controls; `Esc` or `F6` returns. Arrows choose; Enter activates. Text fields take precedence over global shortcuts.
+- `[` / `]`: previous/next subpage. In DNS content, Left/Right switches Servers / Rules / Options. Each page/tab remembers its filter and selected row; deleted rows are clamped on return.
+- `I`: import a subscription from any page. `g` in Proxies: new group. `C` in Routing: import a rule set. These actions also have visible entries.
 - `/`: filter the current list. `:` or **Actions / More**: searchable actions.
 - `a` Add, `e` Edit, `E` Native JSON, `x` Remove; `J/K` reorder rules.
 - `F2` / `Ctrl+S` or the visible Save button: save a draft. Save is not Apply.
 - **References** shows Uses / Used by; **Back to References** restores the original list/filter/selection. Removal/rename cannot leave recognized native references dangling. Atomic edits to the full native document can update definitions and references together.
-- `A` / **Review Changes**: readable summary, expandable redacted Native Diff, explicit Apply. Application validates first, then restarts the core and can interrupt connections.
+- `A` / bottom **Review**: opens **Review Changes**, with a readable summary, expandable redacted Native Diff and explicit Apply. Application validates first, then restarts the core and can interrupt connections.
 - `M`: Rule / Global / Direct. Global/Direct override traffic routing without deleting saved rules. DNS and internal dial paths are not implicitly rewritten; Direct is not an unconditional no-proxy guarantee for internal DNS.
 - `t`: URL latency test, not a bandwidth test. `V`: core configuration check. `v` on Overview: explicit HTTPS connectivity probe.
 - `q`: close only the interface; a running manager/core stays active. Stop / `d` restores managed proxy settings before stopping.

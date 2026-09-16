@@ -335,6 +335,29 @@ impl Drop for Manager {
         let _ = self.stop();
     }
 }
+fn traffic_sample(
+    previous: &api::Status,
+    mut current: api::Status,
+    last: u64,
+    now: u64,
+) -> api::Status {
+    let elapsed = now.saturating_sub(last);
+    current.traffic_available &= last != 0
+        && elapsed > 0
+        && current.uplink_total >= previous.uplink_total
+        && current.downlink_total >= previous.downlink_total;
+    current.uplink = current
+        .uplink_total
+        .saturating_sub(previous.uplink_total)
+        .max(0)
+        / elapsed.max(1) as i64;
+    current.downlink = current
+        .downlink_total
+        .saturating_sub(previous.downlink_total)
+        .max(0)
+        / elapsed.max(1) as i64;
+    current
+}
 impl Manager {
     fn log(&mut self, msg: impl Into<String>) {
         self.activity
@@ -380,17 +403,13 @@ impl Manager {
             match self.api().await {
                 Ok(mut api) => {
                     if let Ok(status) = api.status().await {
-                        let elapsed = model::now().saturating_sub(self.last_sample).max(1) as i64;
-                        let mut status = status;
-                        status.uplink =
-                            (status.uplink_total - self.status.uplink_total).max(0) / elapsed;
-                        status.downlink =
-                            (status.downlink_total - self.status.downlink_total).max(0) / elapsed;
-                        self.last_sample = model::now();
-                        self.status = status;
+                        let now = model::now();
+                        self.status = traffic_sample(&self.status, status, self.last_sample, now);
+                        self.last_sample = now;
                         self.api_ready = true;
                     } else {
                         self.api_ready = false;
+                        self.last_sample = 0;
                     }
                     if let Ok(groups) = api.groups().await {
                         self.groups = groups;
@@ -400,11 +419,13 @@ impl Manager {
                 }
                 Err(_) => {
                     self.api_ready = false;
+                    self.last_sample = 0;
                     self.groups = api::Groups::default();
                 }
             }
         } else {
             self.api_ready = false;
+            self.last_sample = 0;
             self.status = api::Status::default();
             self.groups = api::Groups::default();
         }
@@ -925,6 +946,8 @@ impl Manager {
     }
     async fn start(&mut self, core: &Path, store: &Store) -> Result<()> {
         self.selection_recovery.clear();
+        self.last_sample = 0;
+        self.status = api::Status::default();
         self.connectivity = ProbeStatus::default();
         let log_offset = fs::metadata(self.dir.join("core.log")).map_or(0, |m| m.len());
         for port in if store.native.is_some() {
@@ -2465,6 +2488,27 @@ pub fn authorize_tun(dir: &Path, core: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn traffic_rate_needs_two_valid_samples_and_resets_after_counter_restart() {
+        let base = super::api::Status {
+            traffic_available: true,
+            uplink_total: 100,
+            downlink_total: 200,
+            ..Default::default()
+        };
+        let next = super::api::Status {
+            traffic_available: true,
+            uplink_total: 150,
+            downlink_total: 400,
+            ..Default::default()
+        };
+        assert!(!super::traffic_sample(&base, next.clone(), 0, 10).traffic_available);
+        assert!(!super::traffic_sample(&base, next.clone(), 10, 10).traffic_available);
+        let measured = super::traffic_sample(&base, next.clone(), 10, 12);
+        assert!(measured.traffic_available);
+        assert_eq!((measured.uplink, measured.downlink), (25, 100));
+        assert!(!super::traffic_sample(&next, base, 12, 14).traffic_available);
+    }
     use super::*;
     use serde_json::json;
     #[test]

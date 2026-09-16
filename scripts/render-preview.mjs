@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const version = execFileSync(path.join(root, 'sing'), ['--version'], { cwd: root, encoding: 'utf8' }).trim();
 const lines = execFileSync(path.join(root, 'sing'), ['--preview'], {
   cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024,
 }).trimEnd().split('\n').map(line => line.trimEnd());
@@ -14,12 +15,12 @@ if (!lines.some(line => line.includes('DEMO')) || lines.length !== 30) {
 }
 const escape = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const rows = lines.map((line, i) => {
-  const color = i === 2 ? '#8ce4d1' : (i === 1 || i === 3 || i >= 28) ? '#97baff' : '#dbe3f0';
+  const color = i === 1 || i === lines.length - 1 ? '#72d8bf' : i === 0 || i === lines.length - 3 ? '#8797a9' : '#dae2e9';
   return `<text x="24" y="${74 + i * 20}" fill="${color}" xml:space="preserve">${escape(line)}</text>`;
 }).join('\n');
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="682" viewBox="0 0 1120 682" role="img" aria-labelledby="title desc">
-<title id="title">sing 0.6.0 — real terminal preview</title>
-<desc id="desc">The Overview screen rendered by sing --preview. Fictional stopped demo with no live traffic. Five workspaces, import and setup actions, core and capture status, and Review Changes.</desc>
+<title id="title">${escape(version)} — real terminal preview</title>
+<desc id="desc">The Overview layout rendered by sing --preview, with simplified documentation colors. Fictional stopped demo with no live traffic. Five workspaces, import and setup actions, independent core and capture status, and fixed bottom controls.</desc>
 <rect width="1120" height="682" rx="14" fill="#0f1724"/>
 <path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1b2738"/>
 <circle cx="25" cy="21" r="5" fill="#fa7d86"/><circle cx="43" cy="21" r="5" fill="#f2cc72"/><circle cx="61" cy="21" r="5" fill="#78dba9"/>

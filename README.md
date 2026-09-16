@@ -77,7 +77,7 @@ Use **Stop** to disconnect. `q` closes the interface but leaves a running core a
 
 Settings is global. Advanced native editors are available without duplicating DNS or TUN objects.
 
-`Tab` moves focus, arrows select, `Enter` activates, and `Esc` goes back. `1`–`5` switch workspaces outside text fields; `?` opens help. Visible buttons cover the main tasks—shortcuts are optional. Use an **80×24 or larger** terminal; no mouse or Nerd Font is required.
+`Tab` switches between content and page actions; `F6` focuses the bottom controls. Arrows select, `Enter` activates, and `Esc` goes back. `1`–`5` switch workspaces, `[` / `]` switch subpages, and `,` opens Settings. Keys are shown beside common actions; text input takes priority. Use an **80×24 or larger** terminal; no mouse or Nerd Font is required.
 
 ## A few important distinctions
 
