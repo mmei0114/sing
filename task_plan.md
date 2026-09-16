@@ -9,7 +9,7 @@
 - [x] 完成 Policies：组选择/测速/编辑，规则顺序与编辑，订阅/规则来源入口；复用同一原生对象编辑语言。
 - [x] 完成 Activity：Connections / Apps / Logs，按时间或流量排序，从连接或已观测进程快速生成域名、后缀、正则、进程或 App+Domain 路由规则。
 - [x] 完成 Config：Core 信息/选择/下载，并按 log / dns / ntp / certificate / endpoints / inbounds / outbounds / route / services / experimental 结构编辑；DNS 使用同一列表+详情编辑语言。
-- [ ] 增加窄屏、键盘、快速规则、排序、原生保真回归；运行 fmt / test / clippy / release / 离线 preview，分阶段 Git 提交。
+- [x] 增加窄屏、键盘、快速规则、排序、原生保真回归；运行 fmt / test / clippy / release / 离线 preview，分阶段 Git 提交。
 
 边界：Activity 的 App 列表以 sing-box 实际观测到的网络连接为事实来源，不冒充 Little Snitch 的系统级完整进程库。开发验证不启停用户真实核心、不改真实系统代理/TUN，不自动推送。
 

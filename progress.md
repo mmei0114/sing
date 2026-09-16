@@ -238,3 +238,4 @@
 - Policies 已贯通 Groups / Rules / Sources；Activity 已贯通 Connections / Apps / Logs、最近/流量排序、App→链接证据，以及连接→域名/后缀/正则/IP/进程名/进程路径/App+Domain→目标→共享编辑器的快速规则流程。建议规则插入第一条终结路由动作之前，不会静默落到永远匹配不到的尾部。
 - Config 已按 sing-box 顶层对象顺序接入 Core、log、DNS、NTP、certificate、endpoints、inbounds、outbounds、route、services、experimental 和完整 JSON；Core 支持盘点、选择与官方版本下载入口。
 - 常规回归 100 项通过、6 项需特殊条件的单元测试按设计 ignored；3 个集成测试文件共 6 项需真实内核/回环/权限的测试 ignored。Clippy `-D warnings`、fmt 与 `git diff --check` 通过。未启停真实核心，未改真实 System Proxy/TUN。
+- 正式 `cargo build --release --locked` 通过；`target/release/sing --version` 为 `0.6.1-dev`，离线 110×32 preview 显示三工作区和 Start / Mode / TUN 底栏。二进制 SHA-256：`d7c3c6ea50ea006d727e0b7cf728d9ae31bd13af44c1d3b81f1aaabacfee549e`。文档 43 个本地链接检查通过。
