@@ -1,5 +1,59 @@
 # 设计依据
 
+## 2026-09-16 — 0.6.0 发布收尾
+
+- 原生 Source/SRS 的导入是保留 local/remote 引用并绑定路由，不是第三方规则转换；未知规则数明确显示为未知，核心负责加载和远程更新。客户端不应为“统一导入”破坏原生更新语义。
+- 运行选择必须独立于结构草稿：API 写入后回读成功才记录 selections.json，Apply 恢复仅限成员合法、默认值未改且未由核心缓存负责的手动组。故障时清空旧组缓存，不冒充 LIVE；真实核心已验证选择、Apply 恢复、默认值优先和鉴权失败。
+- 全局 Review 对象摘要和脱敏 JSON pointer 差异来自同一有效配置；先比较原始值再脱敏，避免密码修改被隐藏。最终复核修复长值截断、absent 与 null 混同，保留完整值并转义终端控制字符。
+- 预览与保存之间存在并发变化，恢复入口必须重新取得真实 revision/上下文；订阅刷新只重取原预览来源，规则位置在顺序变化后要求重审。不能把“保留表单”当作已经解决冲突，也不能自动重复不确定写入。
+- 可运行发布与完整产品验收分开记录：122 普通测试/9 显式隔离或只读测试不代表真实 System/TUN/Linux/SSH、提供商速度或新手无指导使用已通过。详见 docs/acceptance-0.6.0.md；客户端 Global target 引用尚不在原生引用图内。
+
+## 2026-09-16 导入恢复与原生引用
+
+- 订阅高级输入留在同一 Form 中，仅改变可见字段/焦点范围；折叠不能丢值，粘贴必须检查 visible_fields 而非底层 fields.len。失败对话框保留原 editor，返回不是重发操作，避免不确定结果时自动重复提交。
+- 原 reference_paths 只匹配 outbound/outbounds/default/final/detour 等字段名，会把 /dns/final 的同名 DNS tag 当出站引用。现在统一由 native::links 类型图服务订阅检查、删除检查与 UI 导航；规则中的 server、拨号地址 server、domain_resolver.server 语义不同。
+- 核对官方 [路由规则](https://sing-box.sagernet.org/configuration/route/rule/)、[DNS 规则](https://sing-box.sagernet.org/configuration/dns/rule/)、[拨号字段](https://sing-box.sagernet.org/configuration/shared/dial/)、[规则集](https://sing-box.sagernet.org/configuration/rule-set/)：逻辑子规则、DNS resolver 字符串/对象需保持原生结构；1.14 规则集 tag 可为数组、http_client 可为对象，不能只扫旧 download_detour。本次已涵盖这些结构中的已知对象引用；具名 http_client 等其他命名空间不在本次完整承诺中。
+- 删除保护仅拦截原有定义消失而新文档仍引用它的情况；避免要求每次草稿编辑都通过全部核心校验，也允许完整原生文档中的原子重命名。UI 先提示跳转、后台再次检查；高级/未知字段不改写。客户端 global_target 等非原生设置引用仍需后续专门接入。
+- 引用跳转保留原上下文，同时记录列表生成时的文档，草稿变化时拒绝按旧数组索引跳转。未知高级对象回到 Advanced Tools，不为引用另建一套配置编辑器。
+
+## M2 订阅与连接引导接续
+
+- 原来的单个 Pending 已变为 PendingSubscriptions：统一 token、revision、多个来源的 staged items；RefreshAll 复用受限下载/解析，全部准备成功才提供一份确认，不在循环内保存。
+- native::reference_paths 用于订阅移除的保守冲突检查，避免删除仍被 selector/路由/拨号路径使用的节点。错误给出原生路径，后续 M3 应将它们变成可返回的引用跳转。
+- 前端 Snapshot 是脱敏的，不能拿其 Store 计算真实并发 revision；新增 ConnectionSetupInfo 返回后台 revision。Setup 的最终提交必须沿用该值，不回退成快照哈希。
+- Setup 是任务引导，不是第二套配置模型：native::connection_setup 在克隆中局部改目标/模式/接管；唯一 tun_template 同时服务既有 Inbounds 编辑器和引导。SaveConnectionSetup 先构造/验证后续审阅，再落盘，避免报错却已部分保存。
+- 保存摘要与应用摘要不同：connection_setup_review 不声明已重启/将因 Save 重启；成功保存后另行 Review Start/Apply。后续应在 M3 统一全局语义审阅，不把新的引导摘要误认为已经替代全局 native diff。
+
+## M2 实施边界与后续接续
+
+- group.rs 的 GroupEditor 是 selector/urltest 的唯一友好编辑器；既有编辑入口与新增模板都转入它。显示名放 Store.display_names；原生 tag 不随显示名更改。不能把组提交重新拆成两个保存动作。
+- RuleImport 父表单保留内联 GroupChange；只有 CommitRuleDraft 才先在 Store 克隆中验证组/资源/绑定，再一次落盘。不能为了预览新组提前调用 WriteGroup。CancelRuleDraft 使用独立 token，以免误删另一客户端预览。
+- 原生 JSON 规则不可复用 MatchRule 扁平化路径：RuleResource.native_document 保留来源，native_rules() 对它返回完整原生条件。旧外部列表元数据仍用受限转换；native reconcile 比较完整条件并检查本地编辑冲突。JSON 原生未知字段保留不等于已通过内核校验。
+- 发现按钮转发 Enter 的递归焦点问题，Select Member 必须先进入 Content 再触发对象选择；其他新按钮也需用实际 Tab/Enter 路径覆盖，不能只测 activate()。
+- 下一步仍按规格 M2 F1 接续：订阅预览/失败恢复、保存后可选初始出口/接管/Review & Start，不修改既有复杂配置；补 Update All。再做 M3 选择持久性、引用、安全 Review；二进制原生规则对象与导入父流程还需统一，不能将全部 A06 视为通过。
+
+## M1 实施依据与后续入口
+
+- 五工作区是呈现层，底层编辑器 ID 仍内部复用；公开导航不再暴露 11 个技术页面。新增 navigation.rs 统一主/子导航、按钮和动作，避免到处重写 DNS/TUN 编辑逻辑。
+- 表单 selected 支持字段及提交/取消两个按钮，粘贴必须 get_mut 检查，避免焦点在按钮时越界；所有文本输入先于全局数字快捷键处理。
+- TUN 不止可能有一个。Configure TUN 对多入站先让用户选择，不能总是修改第一个或创建副本；当前提供窄屏与原生唯一对象测试。
+- 下一步 M2 应实现真正的组工作表和规则导入父事务，不要把本轮新增按钮当成完整流程已经完成。新建组显示名/稳定 tag、成员搜索、多选、默认成员校验和取消行为需要一起处理；已有 native::write/管理器版本检查可复用。
+
+## 最终产品方向 v1（覆盖历史菜单方案）
+
+- 唯一实施规格 docs/product-spec-v1.md：五个顶部工作区 Overview / Proxies / Routing / Network / Activity；Proxies 内 Proxy Groups/Nodes/Subscriptions，Routing 内 Rules/Rule Sets，Network 内 Capture/Inbounds/DNS，Activity 内 Connections/Logs/Diagnostics；全局 Settings 仅客户端工具。
+- 用户要求遵循常见代理客户端习惯。熟悉术语、可见 Import Subscription/Import Rule Set/模式控件优先于自创分类；不再强制日常/配置三分区。入口可多处，编辑器和配置只有一份。
+- 用户明确直接做正式客户端，不做独立原型；当前仅固化实施目标和规格，尚未修改代码。先 M1 导航/交互、再 M2 三主流程、M3 深入与解释、M4 回归和真实可用性验收。
+- 技术边界：TUN 是入站；规则集可被 Route/DNS 共同引用；selector 成员不能仅限订阅节点；默认/自定义原生配置不可被易用视图覆盖。验收 A01–A18 包括异常、Unicode/窄屏、保真和用户无聊天指导操作。
+
+## 2026-09-15 产品交互研究（提案，尚未实施）
+
+- 材料与完整方案见 docs/product-research-2026-09-15.md；使用官方 sing-box Apple/Dashboard/Desktop 文档和源码、Surge、Clash Verge Rev、QX、Hiddify、LazyGit、K9s、btop、Television。实际查看 Surge、Clash、LazyGit、btop 的公开界面素材；QX 依据官方配置样例而非实机 UI，Television 图片未渲染，不据此作视觉结论。
+- 关键反思：原生语义保真不要求主导航逐项对应 JSON。现有 11 个同级技术标签、仅快捷键提示、建组两层保存和抽象 Resources 分类仍让用户按实现结构思考。
+- 建议六个顶部任务入口 Home / Proxies / Routing / Subscriptions / Activity / Settings；DNS 只有 Settings → Network → DNS 一个完整编辑器，规则资源属于 Routing → Rule sets。其他位置提供摘要和对象跳转，不复制配置状态。
+- 优先设计订阅导入到连接、单次提交建组、规则导入与目标绑定三个完整流程；专家以引用跳转、语义 diff、原生字段和可靠运行证据获得深度，而不是依赖平铺入口。
+- 下一步建议先做离线可操作原型并测试发现性，再接现有原生底座。上述为建议，不宣称已实现或已做新手测试；官方网站/开发分支观察不等同于所有发布版本行为。
+
 ## 0.5.1 用户界面反馈
 
 - Advanced 原先直接枚举完整文档，所以 DNS 等已有专页对象重复出现；底层只有一份配置，但重复入口造成心智混乱。本次仅从 Advanced 列表排除 dns/route/inbounds/outbounds，完整 JSON 入口仍保留，未删除任何原生字段。

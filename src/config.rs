@@ -663,6 +663,7 @@ mod tests {
         s.rule_resources.push(crate::model::RuleResource {
             id: "abcd".into(),
             name: "Video sites".into(),
+            native_document: None,
             source: "fixture".into(),
             format: "qx".into(),
             updated_at: 0,

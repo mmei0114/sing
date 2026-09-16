@@ -14,7 +14,7 @@ fn block(title: &str) -> Block<'_> {
         .title(format!(" {title} "))
         .border_style(Style::default().fg(Color::Rgb(56, 72, 88)))
 }
-fn details(a: &App, v: &Value) -> String {
+pub(super) fn details(a: &App, v: &Value) -> String {
     let display = |key: &str| {
         let value = &v[key];
         if value.is_null() {
@@ -64,7 +64,6 @@ fn details(a: &App, v: &Value) -> String {
             lines.push(format!("Bootstrap  {}", display("domain_resolver")));
         }
         if let Some(members) = v["outbounds"].as_array() {
-            lines.push("\nMembers".into());
             let selected = a
                 .snapshot
                 .groups
@@ -72,8 +71,26 @@ fn details(a: &App, v: &Value) -> String {
                 .iter()
                 .find(|g| g.tag == native::tag(v))
                 .map(|g| g.selected.as_str())
-                .or_else(|| v["default"].as_str())
+                .or_else(|| {
+                    (!a.snapshot.connected)
+                        .then(|| v["default"].as_str())
+                        .flatten()
+                })
                 .unwrap_or("");
+            lines.push(format!(
+                "\n{}  {}",
+                if a.snapshot.connected {
+                    "Current member"
+                } else {
+                    "Default (core stopped)"
+                },
+                if selected.is_empty() {
+                    "Unknown / automatic".into()
+                } else {
+                    a.label(selected)
+                }
+            ));
+            lines.push("Members".into());
             for m in members {
                 let tag = m.as_str().unwrap_or("");
                 lines.push(format!(
@@ -99,20 +116,55 @@ fn details(a: &App, v: &Value) -> String {
         .unwrap_or_default()
 }
 pub(super) fn help() -> String {
-    "1–9 / 0 / -: open the numbered top page\nTab: focus top navigation / content; ←→: choose page\n↑↓ or j/k: list movement   /: filter   [ / ]: subpage\na: add   e: form   E: native JSON   x: remove\nEnter: details / select group member\nJ / K: move rule down / up\nF2 / Ctrl+S: save draft   Esc: cancel / close\nA: Review & Apply   V: core check   p: redacted preview\nc: Start (when stopped)   d: Stop   q: close interface\n\nOverview: a imports a node subscription.\nInbounds: s system integration, separate from listeners.\nOutbounds: g new group, a other outbound, Enter selects a member, t latency.\nResources / Subscriptions: a import, r refresh, x remove.\nResources / Rule sets: C import QX/Clash list and choose its routing target; a adds a native rule set. Check conversion warnings before confirming.\nDNS / Routing: Options subpage sets defaults.\nConnections: r refresh, h recent closed, x close one.\nSettings: e core path, i install. Advanced: additional sections, E entire document, b rollback.\n\nJSON fields use native syntax. Blank optional fields omit the override. Form edits preserve fields not changed by the form. E exposes credentials: do not share its screen.\n\nGlobal / Direct override traffic routing. DNS is unchanged. TUN can change routes and interface DNS on this host, including over SSH. Management API address/credentials are reserved for sing.\n\nSubscription refresh reports conflicts with locally modified nodes. Rename a node tag to detach it before replacing its subscription version. Review listener exposure and network paths before applying imported configuration.".into()
+    [
+        "Navigation",
+        "1–5: Overview / Proxies / Routing / Network / Activity",
+        "Tab / Shift+Tab: focus controls, navigation, actions, content, Review",
+        "Arrow keys: choose   Enter: open / execute   Esc: return",
+        "[ / ]: previous / next subpage   ,: Settings   /: filter",
+        "",
+        "Common tasks",
+        "Import Subscription: Overview or Proxies",
+        "New Group: Proxies / Proxy Groups",
+        "Import Rule Set: Routing; includes target selection",
+        "DNS: Network / DNS; Servers, Rules and Options share one editor",
+        "System Proxy / TUN: Network / Capture",
+        "Connections / Logs / Diagnostics: Activity",
+        "",
+        "Editing",
+        "a Add   e Edit   E Native JSON   x Remove   J/K Move rule",
+        "F2 / Ctrl+S or Save Draft button: save without applying",
+        "A or Review Changes: inspect changes, then explicitly Apply",
+        "Native JSON may expose credentials. Do not share that screen.",
+        "",
+        "Operation",
+        "M Mode   c Start   d Stop   t Test selected proxy",
+        "v Connectivity check (Overview)   V Core check   p Preview",
+        "R Restore system proxy   q Close interface (core keeps running)",
+        "",
+        "Global / Direct are traffic routing overrides; DNS is not implicitly changed.",
+        "System Proxy and TUN are different capture mechanisms.",
+        "Over SSH these controls affect the remote host, not your local computer.",
+        "Forms preserve untouched native fields. Subscription updates preserve user policy.",
+    ]
+    .join("\n")
 }
 fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![];
     let mut spans = vec![];
     let mut used = 0;
     for (i, page) in PAGES.iter().enumerate() {
-        let label = format!(" {} {page} ", PAGE_KEYS[i]);
+        let label = if width < 65 {
+            format!(" {page} ")
+        } else {
+            format!(" {} {page} ", i + 1)
+        };
         let size = label.len() as u16;
         if used + size > width && !spans.is_empty() {
             lines.push(Line::from(std::mem::take(&mut spans)));
             used = 0;
         }
-        let style = if i == a.page {
+        let style = if i == a.workspace() {
             Style::default()
                 .bg(ACCENT)
                 .fg(Color::Rgb(17, 23, 30))
@@ -120,7 +172,14 @@ fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
         } else {
             Style::default().fg(MUTED)
         };
-        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(
+            label,
+            if a.focus == Focus::Navigation {
+                style.add_modifier(Modifier::UNDERLINED)
+            } else {
+                style
+            },
+        ));
         used += size;
     }
     if !spans.is_empty() {
@@ -128,29 +187,38 @@ fn navigation(a: &App, width: u16) -> Vec<Line<'static>> {
     }
     lines
 }
-fn page_actions(a: &App) -> &'static str {
-    if a.nav {
-        return "←→ Choose page · Enter Open · Tab Back to content";
+fn button_lines(
+    buttons: &[navigation::Button],
+    focus: Option<usize>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![];
+    let mut spans = vec![];
+    let mut used = 0;
+    for (i, (label, _)) in buttons.iter().enumerate() {
+        let label = format!("[{label}] ");
+        let size = label.len() as u16;
+        if used + size > width && !spans.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        spans.push(Span::styled(
+            label,
+            if focus == Some(i) {
+                Style::default()
+                    .bg(ACCENT)
+                    .fg(Color::Rgb(17, 23, 30))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(MUTED)
+            },
+        ));
+        used += size;
     }
-    match (a.page, a.tabs[a.page]) {
-        (0, _) if a.snapshot.store.native.is_none() => "u Upgrade config · a Import subscription · i Install core",
-        (0, _) => "a Import subscription · Enter Select node · M Routing mode",
-        (1, _) => "a Add inbound · e Edit · E JSON · s System proxy · x Remove",
-        (2, _) => "g New group · a Add outbound · Enter Select node\ne Edit · E JSON · t Test latency · / Filter",
-        (3, 0) => "a Add rule · e Edit · J/K Reorder · x Remove · [] Options",
-        (3, _) => "e Edit routing defaults · E JSON · [] Rules",
-        (4, 0) => "a Add resolver · e Edit · E JSON · x Remove · [] Rules/Options",
-        (4, 1) => "a Add DNS rule · e Edit · J/K Reorder · [] Resolvers/Options",
-        (4, _) => "e Edit DNS defaults · E JSON · [] Resolvers/Rules",
-        (5, 0) => "a Import subscription · r Refresh · x Remove\n[] Rule sets",
-        (5, _) => "C Import QX/Clash rules · a Add native rule set\ne Edit · r Refresh converted rules · [] Subscriptions",
-        (6, _) => "e Edit section · E Full JSON · b Rollback",
-        (7, _) => "r Refresh · Enter Details · h Include closed · x Close one",
-        (8, _) => "r Read core logs",
-        (9, _) => "r Inspect configuration · V Core check · p Preview",
-        (10, _) => "e Core settings · i Install core",
-        _ => "",
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
     }
+    lines
 }
 pub(super) fn draw(f: &mut Frame, a: &App) {
     let area = f.area();
@@ -170,14 +238,33 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         return;
     }
     let tabs = navigation(a, area.width);
+    let global = button_lines(
+        &a.global_buttons(),
+        (a.focus == Focus::Global).then_some(a.control),
+        area.width,
+    );
+    let actions = button_lines(
+        &a.buttons(),
+        (a.focus == Focus::Actions).then_some(a.control),
+        area.width,
+    );
+    let subnav: Vec<_> = a
+        .destinations()
+        .into_iter()
+        .map(|(label, p, t)| (label, Command::Open(p, t)))
+        .collect();
+    let subnav_lines = button_lines(&subnav, Some(a.subtab()), area.width);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(global.len() as u16),
             Constraint::Length(tabs.len() as u16),
+            Constraint::Length(subnav_lines.len() as u16),
+            Constraint::Length(actions.len() as u16),
             Constraint::Min(5),
             Constraint::Length(2),
-            Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(area);
@@ -190,6 +277,21 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
     } else {
         "STOPPED"
     };
+    let capture = match (a.snapshot.system_proxy.effective, a.snapshot.running_tun) {
+        (true, true) => "System + TUN",
+        (true, false) => "System verified",
+        (false, true) => "TUN",
+        _ => "Ports / no takeover",
+    };
+    let mode = if a.snapshot.connected {
+        a.snapshot
+            .running_settings
+            .as_ref()
+            .map(|s| s.route_mode.as_str())
+            .unwrap_or("unknown")
+    } else {
+        a.snapshot.store.settings.route_mode.as_str()
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -197,8 +299,11 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                "{}{} · {state}{}{}",
-                a.snapshot.host,
+                "{}{} · {state} · {capture} · {mode}{}{}",
+                model::clean(&a.snapshot.host)
+                    .chars()
+                    .take(18)
+                    .collect::<String>(),
                 if a.snapshot.ssh { " [SSH]" } else { "" },
                 if a.snapshot.dirty {
                     " · Draft changed"
@@ -210,8 +315,18 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         ])),
         rows[0],
     );
-    f.render_widget(Paragraph::new(tabs), rows[1]);
-    let content = rows[2];
+    f.render_widget(Paragraph::new(global), rows[1]);
+    f.render_widget(Paragraph::new(tabs), rows[2]);
+    f.render_widget(
+        Paragraph::new(subnav_lines).style(if a.focus == Focus::Subnavigation {
+            Style::default().add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default()
+        }),
+        rows[3],
+    );
+    f.render_widget(Paragraph::new(actions), rows[4]);
+    let content = rows[5];
     if a.page == 0 {
         let s = &a.snapshot;
         let doc = a.doc();
@@ -261,6 +376,9 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
             ),
             String::new(),
         ];
+        if !s.selection_recovery.is_empty() {
+            lines.push(s.selection_recovery.clone());
+        }
         if s.store.native.is_none() {
             lines.push("Native configuration upgrade is ready.".into());
             lines.push("u  Review upgrade · original state will be backed up".into());
@@ -291,7 +409,7 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 ));
             }
             if s.store.nodes.is_empty() {
-                lines.push("\na  Import a node subscription to begin".into());
+                lines.push("\nImport Subscription to add your first nodes.".into());
             }
         }
         f.render_widget(
@@ -318,9 +436,33 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
     } else if a.page == 9 {
         f.render_widget(Paragraph::new("r  Inspect native references and saved / running configuration\n\nThis report does not measure network performance.").wrap(Wrap{trim:false}).block(block("Diagnostics")),content);
     } else if a.page == 10 {
-        f.render_widget(Paragraph::new(format!("Core  {}\n\ne  Edit core path\ni  Install verified core\n\nSystem integration is under Inbounds → s.\nInterface language: English",a.snapshot.core)).wrap(Wrap{trim:false}).block(block("Settings")),content);
+        let message = match a.tabs[10] {
+            0 => format!("Core  {}\nVersion  {}\n\nInstall a verified core or choose an existing binary.\nInstallation does not start the proxy.", a.snapshot.core, a.snapshot.version),
+            1 => "Language  English\nKeyboard  Tab to focus, Enter to open\nLayout  Adaptive list and details\n\nNames from subscriptions keep their original language.".into(),
+            _ => format!("Host  {}{}\n\nClosing this interface leaves the running core active.\nStop restores sing-owned proxy settings before stopping.\n\nNetwork configuration is under Network.", a.snapshot.host, if a.snapshot.ssh { " (remote host over SSH)" } else { "" }),
+        };
+        f.render_widget(
+            Paragraph::new(message)
+                .wrap(Wrap { trim: false })
+                .block(block("Settings")),
+            content,
+        );
+    } else if a.page == 11 {
+        let tun_count = native::array(&a.doc(), "/inbounds")
+            .iter()
+            .filter(|v| v["type"] == "tun")
+            .count();
+        let text = format!("System Proxy  {}\nTUN  {}\n\nProxy ports only affect apps configured to use them.\nSystem Proxy covers apps that follow system settings.\nTUN is an inbound; Configure TUN opens that same object.\n{}",
+            if a.snapshot.system_proxy.effective { "Verified" } else if a.snapshot.system_proxy.configured { "Not verified" } else { "Off" },
+            if a.snapshot.running_tun { "Running" } else if tun_count > 0 { "Configured in draft" } else { "Not configured" },
+            if a.snapshot.ssh { "SSH: these controls affect the remote host, not your local computer." } else { "Changes require Review before they affect the network." });
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .block(block("Capture")),
+            content,
+        );
     } else {
-        let tabnames = a.tab_names();
         let heading = if a.page == 7 {
             let age = model::now().saturating_sub(a.connections.observed_at);
             if !a.snapshot.connected {
@@ -336,26 +478,45 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                     a.connections.total
                 )
             }
-        } else if tabnames.is_empty() {
-            PAGES[a.page].into()
         } else {
+            let title = match (a.page, a.tabs[a.page]) {
+                (2, 2) => "All Outbounds",
+                (3, 1) => "Routing Options",
+                (4, 0) => "DNS Servers",
+                (4, 1) => "DNS Rules",
+                (4, _) => "DNS Options",
+                _ => a
+                    .destinations()
+                    .get(a.subtab())
+                    .map(|d| d.0)
+                    .unwrap_or("Details"),
+            };
             format!(
-                "{} · {}",
-                PAGES[a.page],
-                tabnames
-                    .iter()
-                    .enumerate()
-                    .map(|(i, n)| if i == a.tabs[a.page] {
-                        format!("[{n}]")
-                    } else {
-                        n.to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join("  ")
+                "{title}{}",
+                if a.filter.value.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · Filter: {}", model::clean(&a.filter.value))
+                }
             )
         };
-        let inner = block(&heading).inner(content);
+        let mut inner = block(&heading).inner(content);
         f.render_widget(block(&heading), content);
+        if a.page == 3 && a.tabs[3] == 0 && inner.height > 0 {
+            let default = a
+                .doc()
+                .pointer("/route/final")
+                .and_then(Value::as_str)
+                .map(|s| a.label(s))
+                .unwrap_or_else(|| "Core default (first outbound)".into());
+            let footer = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
+            f.render_widget(
+                Paragraph::new(format!("Unmatched traffic → {default}   [Options]"))
+                    .style(Style::default().fg(MUTED)),
+                footer,
+            );
+            inner.height -= 1;
+        }
         let split = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(if area.width >= 115 {
@@ -373,7 +534,13 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                     .map(|(_, label, _)| ListItem::new(model::clean(label)))
                     .collect::<Vec<_>>(),
             )
-            .highlight_style(Style::default().bg(Color::Rgb(33, 53, 60)).fg(ACCENT))
+            .highlight_style(Style::default().bg(Color::Rgb(33, 53, 60)).fg(
+                if a.focus == Focus::Content {
+                    ACCENT
+                } else {
+                    MUTED
+                },
+            ))
             .highlight_symbol("› "),
             split[0],
             &mut state,
@@ -387,11 +554,11 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
                 } else if a.snapshot.store.native.is_none() {
                     "Initialize native configuration on Overview (u)."
                 } else if a.page == 5 && a.tabs[5] == 0 {
-                    "No subscriptions. a imports a subscription link."
+                    "No subscriptions. Choose Import Subscription above."
                 } else if a.page == 5 {
-                    "No rule sets. C imports a QX/Clash rule list."
+                    "No rule sets. Choose Import Rule Set above."
                 } else {
-                    "No items. a adds an object; ? shows help."
+                    "No matching items. Use the actions above or clear the filter."
                 })
                 .wrap(Wrap { trim: false }),
                 split[0],
@@ -420,28 +587,38 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
         model::clean(&a.notice)
     };
     f.render_widget(
-        Paragraph::new(page_actions(a))
-            .style(Style::default().fg(ACCENT))
-            .wrap(Wrap { trim: false }),
-        rows[3],
-    );
-    f.render_widget(
         Paragraph::new(notice)
             .style(Style::default().fg(if a.error { Color::LightRed } else { MUTED }))
             .wrap(Wrap { trim: false }),
-        rows[4],
+        rows[6],
     );
     f.render_widget(
-        Paragraph::new(" Tab Pages  ? Help  A Apply  d Stop  q Quit")
+        Paragraph::new(format!(
+            "{}   [Review Changes]",
+            if a.snapshot.dirty {
+                "Draft changes · not applied"
+            } else {
+                "No pending configuration changes"
+            }
+        ))
+        .style(if a.focus == Focus::Review {
+            Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().fg(MUTED)
+        }),
+        rows[7],
+    );
+    f.render_widget(
+        Paragraph::new(" Tab Focus  Enter Open  / Search  ? Help  q Quit")
             .style(Style::default().fg(MUTED)),
-        rows[5],
+        rows[8],
     );
     if let Some(d) = &a.dialog {
         let dialog_area = Rect::new(
             content.x,
-            content.y,
+            rows[3].y,
             content.width,
-            content.height + rows[3].height,
+            rows[6].y.saturating_sub(rows[3].y),
         );
         draw_dialog(f, d, dialog_area, Some(a));
     }
@@ -449,13 +626,35 @@ pub(super) fn draw(f: &mut Frame, a: &App) {
 pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&App>) {
     let label = |s: &str| app.map_or_else(|| s.to_string(), |a| a.label(s));
     f.render_widget(Clear, area);
+    if let Dialog::Form(form) = d {
+        if matches!(form.action, FormAction::Import { .. }) {
+            super::subscriptions::draw_source(f, form, area);
+            return;
+        }
+    }
+    if matches!(d, Dialog::Subscription(_) | Dialog::Setup(_)) {
+        if let Some(a) = app {
+            super::subscriptions::draw(f, d, area, a);
+        }
+        return;
+    }
+    if let (Dialog::Group(g) | Dialog::InlineGroup { editor: g, .. }, Some(app)) = (d, app) {
+        super::group::draw(f, g, area, app, matches!(d, Dialog::InlineGroup { .. }));
+        return;
+    }
+    if let Dialog::RuleImport(r) = d {
+        if r.preview.is_none() {
+            draw_dialog(f, &Dialog::Form(r.form.clone()), area, app);
+            return;
+        }
+    }
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(2)])
         .split(area);
     let hint = match d {
         Dialog::Form(form) => match form.action {
-            FormAction::Import | FormAction::Convert => " F2 Review import  Esc Cancel\n Tab/↑↓ Field  ←→ Choice  Ctrl+U Clear",
+            FormAction::Import { .. } | FormAction::Convert => " F2 Review import  Esc Cancel\n Tab/↑↓ Field  ←→ Choice  Ctrl+U Clear",
             _ => " F2 Save draft  Esc Cancel\n Tab/↑↓ Field  Space Choose  Ctrl+U Clear",
         },
         Dialog::Json { .. } => " F2 Save draft  Esc Cancel\n Ctrl+U Clear  Arrow keys Move cursor",
@@ -469,7 +668,52 @@ pub(super) fn draw_dialog(f: &mut Frame, d: &Dialog, area: Rect, app: Option<&Ap
         Paragraph::new(hint).style(Style::default().fg(ACCENT)),
         rows[1],
     );
+    if let Dialog::Form(form) = d {
+        f.render_widget(Clear, rows[1]);
+        let submit = if matches!(form.action, FormAction::Import { .. } | FormAction::Convert) {
+            "Review Import"
+        } else {
+            "Save Draft"
+        };
+        let controls = [(submit, Command::Key(' ')), ("Cancel", Command::Key(' '))];
+        f.render_widget(
+            Paragraph::new(button_lines(
+                &controls,
+                form.selected.checked_sub(form.fields.len()),
+                rows[1].width,
+            )),
+            Rect::new(rows[1].x, rows[1].y, rows[1].width, 1),
+        );
+        f.render_widget(
+            Paragraph::new(" Tab Focus  Enter Action  F2 Save  Esc Cancel")
+                .style(Style::default().fg(MUTED)),
+            Rect::new(
+                rows[1].x,
+                rows[1].y + 1,
+                rows[1].width,
+                rows[1].height.saturating_sub(1),
+            ),
+        );
+    }
     match d{
+        Dialog::ApplyReview{summary,diff,expanded,focus,scroll,..}=>{f.render_widget(Paragraph::new(if *expanded{diff.as_str()}else{summary.as_str()}).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block(if *expanded{"Native Diff"}else{"Review Changes"})),rows[0]);f.render_widget(Clear,rows[1]);let labels=["Apply",if *expanded{"Summary"}else{"Native Diff"},"Back"].iter().enumerate().map(|(i,s)|format!("{}[{s}]",if *focus==i{"›"}else{" "})).collect::<Vec<_>>().join(" ");f.render_widget(Paragraph::new(format!("{labels}\nTab Focus · Enter Action · ↑↓ Scroll · Esc Back")).style(Style::default().fg(ACCENT)),rows[1]);},
+        Dialog::References(b)=>{draw_choices(f,&b.title,if b.items.is_empty(){vec!["No known native tag references".into()]}else{b.items.iter().map(|(label,_)|label.clone()).collect()},b.selected,rows[0]);f.render_widget(Clear,rows[1]);f.render_widget(Paragraph::new("[Open Reference] Enter · ↑↓ Select · Esc Close\nBack to References returns to this list."),rows[1]);},
+        Dialog::Failure{editor,message,scroll}=>{f.render_widget(Paragraph::new(message.as_str()).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block("Action Failed")),rows[0]);f.render_widget(Clear,rows[1]);f.render_widget(Paragraph::new(if editor.is_some(){"[Back] Enter / Esc Return with inputs preserved\n↑↓ Scroll · Retry only after reviewing the error."}else{"[Close] Enter / Esc"}).style(Style::default().fg(ACCENT)),rows[1]);},
+        Dialog::Group(_)|Dialog::InlineGroup{..}|Dialog::Subscription(_)|Dialog::Setup(_)=>{},
+        Dialog::SetupReview{body,scroll,..}=>{f.render_widget(Paragraph::new(body.as_str()).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block("Review Setup")),rows[0]);f.render_widget(Clear,rows[1]);f.render_widget(Paragraph::new("[Save Draft] Enter Confirm · Esc Back to Setup\nNext: review Start / Apply separately."),rows[1]);},
+        Dialog::RuleReport{parent,scroll}=>f.render_widget(Paragraph::new(parent.report()).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block("Conversion Report · Esc Back")),rows[0]),
+        Dialog::RuleImport(r)=>{
+            let p=r.preview.as_ref().unwrap();
+            let b=block("Import Rule Set · Target and Position");let inner=b.inner(rows[0]);f.render_widget(b,rows[0]);
+            let mut lines=vec![Line::raw(r.preview_label()),Line::raw(format!("{} conversion warnings · DNS unchanged",p.warnings.len())),Line::raw(if r.shadow_warning(){"Warning: an earlier catch-all rule may shadow this rule."}else{"Source review is available before saving."})];
+            let labels=[format!("Send matching traffic to: {}",r.choices.get(r.target).map(|v|model::clean(&v.1)).unwrap_or_default()),format!("Position: {}",r.position_label()),"[New Group]".into(),"[Conversion Report]".into(),"[Change Source]".into(),"[Save Rule to Draft]".into(),"[Cancel]".into()];
+            for(i,label)in labels.iter().enumerate(){lines.push(Line::styled(format!("{} {label}",if r.focus==i{"›"}else{" "}),Style::default().fg(if r.focus==i{ACCENT}else{MUTED})));}
+            let scroll=(r.focus+3).saturating_sub(inner.height.saturating_sub(1)as usize);
+            f.render_widget(Paragraph::new(lines).scroll((scroll as u16,0)),inner);
+            f.render_widget(Clear,rows[1]);f.render_widget(Paragraph::new(" Tab Focus  ←→ Target / Position\n Enter Action  Esc Back").style(Style::default().fg(ACCENT)),rows[1]);
+        },
+        Dialog::Discard{..}=>f.render_widget(Paragraph::new("Discard unsaved changes?\n\nEnter Discard · Esc Keep editing").block(block("Unsaved Changes")),rows[0]),
+        Dialog::Commands{choices,query,selected}=>draw_choices(f,&format!("Actions · {}",query.value),choices.iter().filter(|(name,_)|name.to_lowercase().contains(&query.value.to_lowercase())).map(|(name,_)|name.to_string()).collect(),*selected,rows[0]),
         Dialog::Text{title,text,scroll,..}=>f.render_widget(Paragraph::new(text.as_str()).wrap(Wrap{trim:false}).scroll((*scroll,0)).block(block(title)),rows[0]),
         Dialog::Form(form)=>{let inner=block(&form.title).inner(rows[0]);f.render_widget(block(&form.title),rows[0]);let visible=(inner.height as usize/2).max(1);let start=form.selected.saturating_sub(visible-1);let mut lines=vec![];for(i,field)in form.fields.iter().enumerate().skip(start).take(visible){lines.push(Line::styled(format!("{} {}",if i==form.selected{"›"}else{" "},field.label),Style::default().fg(if i==form.selected{ACCENT}else{MUTED})));let value=if ["source","url"].contains(&field.key.as_str())&&!field.input.value.is_empty(){"[private value · Ctrl+U to replace]".into()}else{if matches!(field.kind,Kind::Choice(_)){label(&field.input.value)}else if matches!(field.kind,Kind::Members(_)){serde_json::from_str::<Vec<String>>(&field.input.value).unwrap_or_default().iter().map(|s|label(s)).collect::<Vec<_>>().join(", ")}else{model::clean(&field.input.value)}};lines.push(Line::raw(format!("  {}",if value.is_empty(){"(default / omitted)"}else{&value})));}f.render_widget(Paragraph::new(lines),inner);},
         Dialog::Json{edit,input}=>{let b=block(if edit.pointer.is_empty(){"Native document · credentials visible"}else{&edit.pointer});let inner=b.inner(rows[0]);f.render_widget(b,rows[0]);let line=input.value[..input.cursor].bytes().filter(|c|*c==b'\n').count();let col=input.value[..input.cursor].rsplit('\n').next().unwrap_or("").chars().count();let sy=line.saturating_sub(inner.height.saturating_sub(1)as usize);let sx=col.saturating_sub(inner.width.saturating_sub(1)as usize);f.render_widget(Paragraph::new(input.value.as_str()).scroll((sy as u16,sx as u16)),inner);f.set_cursor_position((inner.x+(col-sx)as u16,inner.y+(line-sy)as u16));},

@@ -22,6 +22,7 @@ use std::{
 };
 
 pub const CORE_VERSION: &str = "1.14.0";
+mod selection;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "action", content = "data", rename_all = "snake_case")]
 pub enum Action {
@@ -31,6 +32,20 @@ pub enum Action {
     },
     ReadNative(String),
     WriteNative(native::Edit),
+    WriteGroup(native::GroupChange),
+    PrepareRuleDraft {
+        source: String,
+        name: String,
+        format: String,
+        revision: String,
+    },
+    CommitRuleDraft {
+        id: String,
+        revision: String,
+        target: String,
+        position: usize,
+        group: Option<native::GroupChange>,
+    },
     ReviewApply,
     ApplyNative {
         revision: String,
@@ -49,6 +64,16 @@ pub enum Action {
         user_agent: String,
     },
     Refresh(String),
+    RefreshAll,
+    ReprepareSubscriptions(String),
+    ConnectionSetupInfo,
+    ReviewConnectionSetup(native::ConnectionSetup),
+    SaveConnectionSetup(native::ConnectionSetup),
+    CommitSubscriptions {
+        id: String,
+        revision: String,
+    },
+    CancelSubscriptions(String),
     CommitImport,
     CancelImport,
     Delete(String),
@@ -81,6 +106,7 @@ pub enum Action {
     RefreshRules(String),
     CommitRules,
     CancelRules,
+    CancelRuleDraft(String),
     SaveBinding(RuleBinding),
     DeleteBinding(String),
     MoveBinding {
@@ -90,6 +116,10 @@ pub enum Action {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RulesPreview {
+    #[serde(default)]
+    pub draft_id: String,
+    #[serde(default)]
+    pub revision: String,
     pub name: String,
     pub format: String,
     pub input_count: usize,
@@ -118,6 +148,12 @@ impl Default for ProbeStatus {
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ImportPreview {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub sources: Vec<String>,
     pub name: String,
     pub format: String,
     pub count: usize,
@@ -128,6 +164,8 @@ pub struct ImportPreview {
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub selection_recovery: String,
     #[serde(default)]
     pub manager_protocol: u32,
     #[serde(default)]
@@ -152,6 +190,8 @@ pub struct Snapshot {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Reply {
     #[serde(default)]
+    pub diff: Option<String>,
+    #[serde(default)]
     pub edit: Option<native::Edit>,
     #[serde(default)]
     pub confirm: Option<Action>,
@@ -173,6 +213,7 @@ pub struct Reply {
 impl Reply {
     fn success(message: impl Into<String>) -> Self {
         Self {
+            diff: None,
             edit: None,
             confirm: None,
             connections: None,
@@ -188,7 +229,7 @@ impl Reply {
         }
     }
     fn error(e: anyhow::Error) -> Self {
-        let mut r = Self::success(model::clean(&format!("{e:#}")));
+        let mut r = Self::success(model::clean_multiline(&format!("{e:#}")));
         r.ok = false;
         r
     }
@@ -252,12 +293,28 @@ pub fn ensure_daemon(dir: &Path) -> Result<()> {
     bail!("Manager startup timed out")
 }
 
+#[derive(Clone)]
 struct Pending {
     sub: Subscription,
     nodes: Vec<Node>,
 }
+#[derive(Clone)]
+struct PendingSubscriptions {
+    items: Vec<Pending>,
+    id: String,
+    revision: String,
+}
+struct PendingRules {
+    native_set: Option<serde_json::Value>,
+    resource: RuleResource,
+    binding: RuleBinding,
+    revision: String,
+    id: String,
+    unbound: bool,
+}
 struct Manager {
-    pending_rules: Option<(RuleResource, RuleBinding)>,
+    selection_recovery: String,
+    pending_rules: Option<PendingRules>,
     lease: proxy_helper::Lease,
     connectivity: ProbeStatus,
     dir: PathBuf,
@@ -265,7 +322,7 @@ struct Manager {
     child: Option<Child>,
     tun: bool,
     running: Option<Store>,
-    pending: Option<Pending>,
+    pending: Option<PendingSubscriptions>,
     activity: Vec<String>,
     status: api::Status,
     groups: api::Groups,
@@ -341,7 +398,10 @@ impl Manager {
                         self.groups = api::Groups::default();
                     }
                 }
-                Err(_) => self.api_ready = false,
+                Err(_) => {
+                    self.api_ready = false;
+                    self.groups = api::Groups::default();
+                }
             }
         } else {
             self.api_ready = false;
@@ -381,6 +441,9 @@ impl Manager {
         store.secret.clear();
         for sub in &mut store.subscriptions {
             sub.source = source_label(&sub.source);
+            if !sub.user_agent.is_empty() {
+                sub.user_agent = "[configured]".into();
+            }
         }
         for resource in &mut store.rule_resources {
             resource.source = source_label(&resource.source);
@@ -390,7 +453,8 @@ impl Manager {
         }
         store.native = store.native.as_ref().map(config::redacted);
         Snapshot {
-            manager_protocol: 6,
+            selection_recovery: self.selection_recovery.clone(),
+            manager_protocol: 9,
             system_proxy,
             connectivity: if connected {
                 self.connectivity.clone()
@@ -422,6 +486,7 @@ impl Manager {
         user_agent: String,
         existing: Option<String>,
     ) -> Result<Reply> {
+        self.pending = None;
         ensure!(
             !source.trim().is_empty(),
             "Paste a subscription URL or node URI"
@@ -461,6 +526,9 @@ impl Manager {
             model::clean(&name)
         };
         let p = ImportPreview {
+            id: model::token()?,
+            revision: native::revision(&self.store),
+            sources: vec![],
             name: name.clone(),
             format: parsed.format.clone(),
             count: parsed.nodes.len(),
@@ -481,17 +549,21 @@ impl Manager {
                 .map(|n| n.name.clone())
                 .collect(),
         };
-        self.pending = Some(Pending {
-            sub: Subscription {
-                id,
-                name,
-                source,
-                format: parsed.format,
-                updated_at: model::now(),
-                warnings: parsed.warnings,
-                user_agent,
-            },
-            nodes: parsed.nodes,
+        self.pending = Some(PendingSubscriptions {
+            id: p.id.clone(),
+            revision: p.revision.clone(),
+            items: vec![Pending {
+                sub: Subscription {
+                    id,
+                    name,
+                    source,
+                    format: parsed.format,
+                    updated_at: model::now(),
+                    warnings: parsed.warnings,
+                    user_agent,
+                },
+                nodes: parsed.nodes,
+            }],
         });
         let mut r = Reply::success("Review the import before saving");
         r.preview = Some(p);
@@ -505,6 +577,88 @@ impl Manager {
         self.store = store;
         Ok(())
     }
+    fn commit_subscriptions(&mut self) -> Result<Reply> {
+        let pending = self
+            .pending
+            .as_ref()
+            .context("No subscription preview; review sources again")?;
+        ensure!(
+            pending.revision == native::revision(&self.store),
+            "Draft changed; review subscriptions again before saving"
+        );
+        let mut s = self.store.clone();
+        let mut count = 0;
+        for p in &pending.items {
+            s.nodes.retain(|n| n.provider != p.sub.id);
+            s.nodes.extend(p.nodes.clone());
+            s.subscriptions.retain(|x| x.id != p.sub.id);
+            s.subscriptions.push(p.sub.clone());
+            count += p.nodes.len();
+        }
+        if !s.nodes.iter().any(|n| Some(&n.id) == s.selected.as_ref()) {
+            s.selected = s.nodes.first().map(|n| n.id.clone());
+        }
+        self.save(s)?;
+        self.pending = None;
+        self.log(format!(
+            "Saved {count} subscription nodes; running configuration unchanged"
+        ));
+        Ok(Reply::success("Subscriptions saved to draft; not applied"))
+    }
+    async fn refresh_all(&mut self) -> Result<Reply> {
+        self.pending = None;
+        let subs = self.store.subscriptions.clone();
+        ensure!(!subs.is_empty(), "Import a subscription first");
+        let mut items = vec![];
+        let mut preview = ImportPreview {
+            id: model::token()?,
+            revision: native::revision(&self.store),
+            sources: vec![],
+            name: format!("{} subscriptions", subs.len()),
+            format: "batch update".into(),
+            count: 0,
+            added: 0,
+            removed: 0,
+            warnings: vec![],
+            names: vec![],
+        };
+        for sub in subs {
+            let r = self
+                .prepare(sub.source, sub.name.clone(), sub.user_agent, Some(sub.id))
+                .await
+                .with_context(|| {
+                    format!(
+                        "Update failed for {}; no subscriptions saved",
+                        model::clean(&sub.name)
+                    )
+                })?;
+            let p = r.preview.context("Missing subscription preview")?;
+            preview.sources.push(format!(
+                "{}: {} nodes · +{} / -{}",
+                p.name, p.count, p.added, p.removed
+            ));
+            preview.count += p.count;
+            preview.added += p.added;
+            preview.removed += p.removed;
+            preview
+                .warnings
+                .extend(p.warnings.into_iter().map(|w| format!("{}: {w}", p.name)));
+            items.extend(
+                self.pending
+                    .take()
+                    .context("Missing staged subscription")?
+                    .items,
+            );
+        }
+        self.pending = Some(PendingSubscriptions {
+            items,
+            id: preview.id.clone(),
+            revision: preview.revision.clone(),
+        });
+        let mut r = Reply::success("Review all updates; one save, no automatic Apply");
+        r.preview = Some(preview);
+        Ok(r)
+    }
     async fn prepare_rules(
         &mut self,
         source: String,
@@ -514,12 +668,86 @@ impl Manager {
         existing: Option<String>,
     ) -> Result<Reply> {
         self.pending_rules = None;
+        let is_srs = format == "auto"
+            && url::Url::parse(&source)
+                .map(|u| u.path().ends_with(".srs"))
+                .unwrap_or_else(|_| source.ends_with(".srs"));
+        if ["native-source", "native-srs"].contains(&format.as_str()) || is_srs {
+            ensure!(
+                target.is_empty() && existing.is_none(),
+                "Use Import Rule Set for native references; the core owns updates"
+            );
+            let format = if is_srs {
+                "native-srs".to_string()
+            } else {
+                format
+            };
+            let value = native::resource::reference(&source, &format)?;
+            let revision = native::revision(&self.store);
+            let id = model::token()?;
+            let name = if name.trim().is_empty() {
+                "Native Rule Set".into()
+            } else {
+                model::clean(&name)
+            };
+            let mut reply =
+                Reply::success("Native reference preview; no download or conversion performed");
+            reply.rules_preview = Some(RulesPreview {
+                draft_id: id.clone(),
+                revision: revision.clone(),
+                name: name.clone(),
+                format: format.clone(),
+                input_count: 0,
+                count: 0,
+                added: 0,
+                removed: 0,
+                target: String::new(),
+                warnings: vec![],
+                policies: vec![],
+                sample: vec![
+                    format!(
+                        "Native {} / {} resource",
+                        value["type"].as_str().unwrap(),
+                        value["format"].as_str().unwrap()
+                    ),
+                    "Contents are loaded by sing-box on Apply / Start; rule count is unknown."
+                        .into(),
+                    "Remote refresh, cache and HTTP settings belong to this native object.".into(),
+                ],
+            });
+            self.pending_rules = Some(PendingRules {
+                native_set: Some(value),
+                resource: RuleResource {
+                    id: String::new(),
+                    name,
+                    source,
+                    format,
+                    updated_at: 0,
+                    digest: String::new(),
+                    input_count: 0,
+                    rules: vec![],
+                    native_document: None,
+                    warnings: vec![],
+                },
+                binding: RuleBinding {
+                    id: String::new(),
+                    resource: String::new(),
+                    target: String::new(),
+                    enabled: true,
+                },
+                revision,
+                id,
+                unbound: true,
+            });
+            return Ok(reply);
+        }
         ensure!(
             !source.trim().is_empty(),
             "Paste a rule subscription URL / local file / rule text"
         );
         ensure!(
-            (existing.is_some() && self.store.native.is_some())
+            (target.is_empty() && self.store.native.is_some())
+                || (existing.is_some() && self.store.native.is_some())
                 || config::target_exists(&self.store, &target, true),
             "Choose an existing target group"
         );
@@ -534,15 +762,25 @@ impl Manager {
             .map_err(|_| first)?,
             Err(e) => return Err(e),
         };
-        let parsed = ruleset::parse(&text, &format)?;
+        let native_document = if self.store.native.is_some() {
+            ruleset::native_document(&text, &format)?
+        } else {
+            None
+        };
+        let parsed = if let Some(doc) = &native_document {
+            ruleset::Parsed {
+                rules: vec![],
+                warnings: vec![],
+                policies: vec![],
+                input_count: doc["rules"].as_array().unwrap().len(),
+                format: "native".into(),
+            }
+        } else {
+            ruleset::parse(&text, &format)?
+        };
         let existing_native_refresh = existing.is_some() && self.store.native.is_some();
         let id = existing.unwrap_or_else(|| model::id(&format!("rules:{source}")));
         let old = self.store.rule_resources.iter().find(|r| r.id == id);
-        let old_rules: std::collections::HashSet<_> =
-            old.into_iter().flat_map(|o| o.rules.iter()).collect();
-        let new_rules: std::collections::HashSet<_> = parsed.rules.iter().collect();
-        let added = new_rules.difference(&old_rules).count();
-        let removed = old_rules.difference(&new_rules).count();
         let name = if name.trim().is_empty() {
             format!("Rules {}", self.store.rule_resources.len() + 1)
         } else {
@@ -557,8 +795,30 @@ impl Manager {
             digest: model::id(&text),
             input_count: parsed.input_count,
             rules: parsed.rules.clone(),
+            native_document,
             warnings: parsed.warnings.clone(),
         };
+        // Count source entries, not the consolidated OR buckets emitted by the
+        // external converter. Native entries retain their complete JSON shape.
+        let entries = |r: &RuleResource| -> Vec<String> {
+            if r.native_document.is_some() {
+                r.native_rules()
+                    .iter()
+                    .map(serde_json::Value::to_string)
+                    .collect()
+            } else {
+                r.rules
+                    .iter()
+                    .map(|v| format!("{}  {}", v.kind, v.value))
+                    .collect()
+            }
+        };
+        let new_entries = entries(&resource);
+        let old_rules: std::collections::HashSet<_> =
+            old.map(entries).unwrap_or_default().into_iter().collect();
+        let new_rules: std::collections::HashSet<_> = new_entries.iter().cloned().collect();
+        let added = new_rules.difference(&old_rules).count();
+        let removed = old_rules.difference(&new_rules).count();
         let binding = self
             .store
             .rule_bindings
@@ -572,11 +832,15 @@ impl Manager {
                 enabled: true,
             });
         let mut reply = Reply::success("Review conversion and target before saving; unsupported rules are excluded only after confirmation");
+        let revision = native::revision(&self.store);
+        let draft_id = model::token()?;
         reply.rules_preview = Some(RulesPreview {
+            draft_id: draft_id.clone(),
+            revision: revision.clone(),
             name,
             format: parsed.format,
             input_count: parsed.input_count,
-            count: parsed.rules.len(),
+            count: new_entries.len(),
             added,
             removed,
             target: if existing_native_refresh {
@@ -586,14 +850,16 @@ impl Manager {
             },
             warnings: parsed.warnings,
             policies: parsed.policies,
-            sample: parsed
-                .rules
-                .iter()
-                .take(8)
-                .map(|r| format!("{}  {}", r.kind, r.value))
-                .collect(),
+            sample: new_entries.into_iter().take(8).collect(),
         });
-        self.pending_rules = Some((resource, binding));
+        self.pending_rules = Some(PendingRules {
+            native_set: None,
+            resource,
+            binding,
+            revision,
+            id: draft_id,
+            unbound: target.is_empty(),
+        });
         Ok(reply)
     }
     async fn check_store(&self, store: &Store) -> Result<PathBuf> {
@@ -658,6 +924,7 @@ impl Manager {
         Ok(())
     }
     async fn start(&mut self, core: &Path, store: &Store) -> Result<()> {
+        self.selection_recovery.clear();
         self.connectivity = ProbeStatus::default();
         let log_offset = fs::metadata(self.dir.join("core.log")).map_or(0, |m| m.len());
         for port in if store.native.is_some() {
@@ -686,11 +953,7 @@ impl Manager {
             if !self.connected() {
                 bail!(
                     "{}: {}",
-                    if store.settings.language == "zh" {
-                        "核心启动失败"
-                    } else {
-                        "Core stopped during startup"
-                    },
+                    "Core stopped during startup",
                     startup_error(&self.dir, log_offset, store)
                 );
             }
@@ -699,6 +962,7 @@ impl Manager {
                     self.version = version.version;
                     self.api_ready = true;
                     self.log("Core ready · native gRPC connected");
+                    self.restore_selections(store).await;
                     if store.settings.mode == "system" {
                         self.lease.set(true);
                         match proxy_helper::enable(&self.dir, store.settings.port) {
@@ -742,27 +1006,37 @@ impl Manager {
         }
         let new = self.store.clone();
         match self.start(&core, &new).await {
-            Ok(()) => Ok(Reply::success(match new.settings.mode.as_str() {
+            Ok(()) => Ok(Reply::success(if native::uses_tun(&new) {
+                "TUN core ready. Internet access is not yet checked."
+            } else {
+                match new.settings.mode.as_str() {
                 "system" => {
                     "Core ready; system proxy configured. Internet access is not yet checked (v)."
                 }
                 "tun" => "TUN core ready. Internet access is not yet checked (v).",
                 _ => "Proxy port ready; applications are NOT automatically routed through it.",
+            }
             })),
             Err(error) => {
                 self.stop().context(
                     "Apply failed, but proxy restoration is still pending; keeping the core alive",
                 )?;
-                if let Some(old) = old {
+                let recovery = if let Some(old) = old {
                     let old_core = find_core(&self.dir, &old.settings.core).unwrap_or(core);
                     match self.start(&old_core, &old).await {
                         Ok(()) => {
-                            self.log("Apply failed; restored the previously running configuration")
+                            self.log("Apply failed; restored the previously running configuration");
+                            "Previous configuration restarted and native API is ready. Internet access remains unchecked.".to_string()
                         }
-                        Err(e) => self.log(format!("Rollback also failed: {e}")),
+                        Err(e) => {
+                            self.log(format!("Rollback also failed: {e}"));
+                            format!("Rollback failed: {e}. Inspect Activity before retrying.")
+                        }
                     }
-                }
-                Err(error)
+                } else {
+                    "Core stopped; there was no previous running configuration to restore.".into()
+                };
+                bail!("{error:#}\nRecovery: {recovery}")
             }
         }
     }
@@ -783,6 +1057,122 @@ impl Manager {
             );
         }
         match action {
+            Action::ReprepareSubscriptions(id) => {
+                let pending = self
+                    .pending
+                    .as_ref()
+                    .context("Preview expired; use Update or Import again")?;
+                ensure!(
+                    pending.id == id,
+                    "Preview was replaced; use Update or Import again"
+                );
+                let sources = pending
+                    .items
+                    .iter()
+                    .map(|p| p.sub.clone())
+                    .collect::<Vec<_>>();
+                let original = pending.clone();
+                let mut items = vec![];
+                let mut combined: Option<ImportPreview> = None;
+                for source in sources {
+                    let reply = match self
+                        .prepare(
+                            source.source,
+                            source.name,
+                            source.user_agent,
+                            Some(source.id),
+                        )
+                        .await
+                    {
+                        Ok(reply) => reply,
+                        Err(error) => {
+                            self.pending = Some(original);
+                            return Err(error);
+                        }
+                    };
+                    let staged = self.pending.take().context("Source preview missing")?;
+                    items.extend(staged.items);
+                    let p = reply.preview.context("Source preview missing")?;
+                    if let Some(all) = &mut combined {
+                        all.count += p.count;
+                        all.added += p.added;
+                        all.removed += p.removed;
+                        all.names.extend(p.names);
+                        all.warnings.extend(p.warnings);
+                        all.sources.extend(p.sources);
+                    } else {
+                        combined = Some(p);
+                    }
+                }
+                let mut preview = combined.context("Preview has no sources")?;
+                if items.len() > 1 {
+                    preview.name = format!("{} subscriptions", items.len());
+                }
+                preview.id = model::token()?;
+                preview.revision = native::revision(&self.store);
+                self.pending = Some(PendingSubscriptions {
+                    items,
+                    id: preview.id.clone(),
+                    revision: preview.revision.clone(),
+                });
+                let mut reply = Reply::success("Preview refreshed; review changes before saving");
+                reply.preview = Some(preview);
+                Ok(reply)
+            }
+            Action::ConnectionSetupInfo => {
+                let mut r = Reply::success("Choose target and capture; no changes yet");
+                r.edit = Some(native::Edit {
+                    revision: native::revision(&self.store),
+                    pointer: String::new(),
+                    value: config::redacted(&native::migration(&self.store)?),
+                });
+                Ok(r)
+            }
+            Action::ReviewConnectionSetup(change) => {
+                let s = native::connection_setup(
+                    &self.store,
+                    &change,
+                    std::env::var_os("SSH_CONNECTION").is_some(),
+                    cfg!(target_os = "macos"),
+                )?;
+                let mut r = Reply::success("Review connection setup; nothing saved or started yet");
+                r.config = Some(native::connection_setup_review(&self.store, &s)?);
+                r.confirm = Some(Action::SaveConnectionSetup(change));
+                Ok(r)
+            }
+            Action::SaveConnectionSetup(change) => {
+                let s = native::connection_setup(
+                    &self.store,
+                    &change,
+                    std::env::var_os("SSH_CONNECTION").is_some(),
+                    cfg!(target_os = "macos"),
+                )?;
+                let review = native::review(&s, self.running.as_ref())?;
+                let diff = native::review::detailed(
+                    &self
+                        .running
+                        .as_ref()
+                        .map(config::generate)
+                        .transpose()?
+                        .unwrap_or(serde_json::json!({})),
+                    &config::generate(&s)?,
+                );
+                if self.store.native.is_none() && !self.dir.join("pre-native-state.json").exists() {
+                    model::atomic_write(
+                        &self.dir.join("pre-native-state.json"),
+                        &serde_json::to_vec_pretty(&self.store)?,
+                    )?;
+                }
+                self.save(s)?;
+                let mut r =
+                    Reply::success("Setup saved to draft. Confirm Start / Apply only when ready.");
+                r.diff = Some(diff);
+                r.config = Some(review);
+                r.confirm = Some(Action::ApplyNative {
+                    revision: native::revision(&self.store),
+                });
+                Ok(r)
+            }
             Action::ReviewMigration => {
                 ensure!(
                     self.store.native.is_none(),
@@ -824,13 +1214,36 @@ impl Manager {
                 self.save(s)?;
                 Ok(Reply::success("Draft saved. Review & Apply when ready."))
             }
+            Action::WriteGroup(change) => {
+                let mut store = self.store.clone();
+                native::write_group(&mut store, change)?;
+                self.save(store)?;
+                Ok(Reply::success(
+                    "Group saved to draft. Review Changes to apply.",
+                ))
+            }
             Action::ReviewApply => {
                 let mut r = Reply::success("Review & Apply");
                 let connected = self.connected();
+                r.diff = Some(native::review::detailed(
+                    &self
+                        .running
+                        .as_ref()
+                        .filter(|_| connected)
+                        .map(config::generate)
+                        .transpose()?
+                        .unwrap_or(serde_json::json!({})),
+                    &config::generate(&self.store)?,
+                ));
                 r.config = Some(native::review(
                     &self.store,
                     self.running.as_ref().filter(|_| connected),
                 )?);
+                let memory = selection::load(&self.dir)?;
+                r.config
+                    .as_mut()
+                    .unwrap()
+                    .push_str(&format!("\n\n{}", selection::summary(&self.store, &memory)));
                 r.confirm = Some(Action::ApplyNative {
                     revision: native::revision(&self.store),
                 });
@@ -843,59 +1256,7 @@ impl Manager {
                 );
                 self.connect().await
             }
-            Action::SelectNative { group, member } => {
-                let mut s = self.store.clone();
-                let doc = s
-                    .native
-                    .as_mut()
-                    .context("Native configuration not initialized")?;
-                let g = doc["outbounds"]
-                    .as_array_mut()
-                    .context("Missing outbounds")?
-                    .iter_mut()
-                    .find(|v| native::tag(v) == group)
-                    .context("Group not found")?;
-                ensure!(
-                    g["type"] == "selector"
-                        && native::array(g, "/outbounds").iter().any(|v| v == &member),
-                    "Not a selectable member"
-                );
-                if self.connected() {
-                    let loaded = self
-                        .running
-                        .as_ref()
-                        .and_then(|s| s.native.as_ref())
-                        .context("Apply native draft first")?;
-                    let live = native::array(loaded, "/outbounds")
-                        .iter()
-                        .find(|v| native::tag(v) == group)
-                        .context("Apply the new group first")?;
-                    ensure!(
-                        live["type"] == "selector"
-                            && native::array(live, "/outbounds")
-                                .iter()
-                                .any(|v| v == &member),
-                        "Apply new group members first"
-                    );
-                    self.api()
-                        .await?
-                        .select_group(group.clone(), member.clone())
-                        .await?;
-                    if let Some(doc) = self.running.as_mut().and_then(|s| s.native.as_mut()) {
-                        if let Some(g) = doc["outbounds"]
-                            .as_array_mut()
-                            .unwrap()
-                            .iter_mut()
-                            .find(|v| native::tag(v) == group)
-                        {
-                            g["default"] = serde_json::json!(member);
-                        }
-                    }
-                }
-                g["default"] = serde_json::json!(member);
-                self.save(s)?;
-                Ok(Reply::success("Group selection saved"))
-            }
+            Action::SelectNative { group, member } => self.select_native(group, member).await,
             Action::Connections => {
                 let mut items = if self.connected() {
                     self.api().await?.connections().await?
@@ -1044,7 +1405,65 @@ impl Manager {
                 name,
                 format,
                 target,
-            } => self.prepare_rules(source, name, format, target, None).await,
+            } => {
+                ensure!(!target.is_empty(), "Choose an existing target group");
+                self.prepare_rules(source, name, format, target, None).await
+            }
+            Action::PrepareRuleDraft {
+                source,
+                name,
+                format,
+                revision,
+            } => {
+                ensure!(
+                    revision == native::revision(&self.store),
+                    "Draft changed. Reopen rule import before reviewing."
+                );
+                self.prepare_rules(source, name, format, String::new(), None)
+                    .await
+            }
+            Action::CommitRuleDraft {
+                id,
+                revision,
+                target,
+                position,
+                group,
+            } => {
+                let pending = self
+                    .pending_rules
+                    .as_ref()
+                    .context("No rule import pending. Review the source again.")?;
+                ensure!(
+                    pending.unbound && pending.id == id && pending.revision == revision,
+                    "Rule import preview was replaced. Review the source again."
+                );
+                ensure!(
+                    revision == native::revision(&self.store),
+                    "Draft changed. Reopen rule import before saving."
+                );
+                let mut store = self.store.clone();
+                if let Some(group) = group {
+                    ensure!(
+                        native::tag(&group.value) == target,
+                        "The new group must be the rule target"
+                    );
+                    native::write_group(&mut store, group)?;
+                }
+                if let Some(value) = &pending.native_set {
+                    native::resource::bind(
+                        &mut store,
+                        value.clone(),
+                        &pending.resource.name,
+                        &target,
+                        position,
+                    )?;
+                } else {
+                    native::bind_rule_resource(&mut store, &pending.resource, &target, position)?;
+                }
+                self.save(store)?;
+                self.pending_rules = None;
+                Ok(Reply::success("Rule set and routing target saved to draft. DNS unchanged. Review Changes to apply."))
+            }
             Action::RefreshRules(id) => {
                 let r = self
                     .store
@@ -1065,11 +1484,20 @@ impl Manager {
                     .await
             }
             Action::CommitRules => {
-                let (resource, binding) = self
+                let pending = self
                     .pending_rules
                     .as_ref()
-                    .context("No rules pending review")?
-                    .clone();
+                    .context("No rules pending review")?;
+                ensure!(
+                    !pending.unbound,
+                    "Choose a target and insertion position before saving"
+                );
+                ensure!(
+                    pending.revision == native::revision(&self.store),
+                    "Draft changed. Review rule update again."
+                );
+                let resource = pending.resource.clone();
+                let binding = pending.binding.clone();
                 let mut store = self.store.clone();
                 if let Some(old) = store
                     .rule_resources
@@ -1090,6 +1518,18 @@ impl Manager {
                 self.pending_rules = None;
                 Ok(Reply::success(
                     "Rules saved locally; source policies are not executed. Press c to apply.",
+                ))
+            }
+            Action::CancelRuleDraft(id) => {
+                if self
+                    .pending_rules
+                    .as_ref()
+                    .is_some_and(|p| p.unbound && p.id == id)
+                {
+                    self.pending_rules = None;
+                }
+                Ok(Reply::success(
+                    "Rule import discarded; saved configuration unchanged",
                 ))
             }
             Action::CancelRules => {
@@ -1254,28 +1694,31 @@ impl Manager {
                     .clone();
                 self.prepare(s.source, s.name, s.user_agent, Some(id)).await
             }
+            Action::RefreshAll => self.refresh_all().await,
+            Action::CommitSubscriptions { id, revision } => {
+                let p = self
+                    .pending
+                    .as_ref()
+                    .context("No subscription preview; review sources again")?;
+                ensure!(
+                    p.id == id && p.revision == revision,
+                    "Subscription preview was replaced; review sources again"
+                );
+                self.commit_subscriptions()
+            }
+            Action::CancelSubscriptions(id) => {
+                if self.pending.as_ref().is_some_and(|p| p.id == id) {
+                    self.pending = None;
+                }
+                Ok(Reply::success(
+                    "Subscription preview discarded; saved configuration unchanged",
+                ))
+            }
             Action::CancelImport => {
                 self.pending = None;
                 Ok(Reply::success("Import cancelled"))
             }
-            Action::CommitImport => {
-                let p = self.pending.as_ref().context("Nothing to import")?;
-                let mut s = self.store.clone();
-                s.nodes.retain(|n| n.provider != p.sub.id);
-                s.nodes.extend(p.nodes.clone());
-                s.subscriptions.retain(|x| x.id != p.sub.id);
-                s.subscriptions.push(p.sub.clone());
-                if !s.nodes.iter().any(|n| Some(&n.id) == s.selected.as_ref()) {
-                    s.selected = s.nodes.first().map(|n| n.id.clone());
-                }
-                let count = p.nodes.len();
-                self.save(s)?;
-                self.pending = None;
-                self.log(format!("Imported {count} nodes; credentials kept locally"));
-                Ok(Reply::success(
-                    "Subscription saved. Press c to connect / apply.",
-                ))
-            }
+            Action::CommitImport => self.commit_subscriptions(),
             Action::Delete(id) => {
                 let mut s = self.store.clone();
                 s.subscriptions.retain(|x| x.id != id);
@@ -1510,6 +1953,7 @@ pub fn daemon(dir: &Path) -> Result<()> {
         api_ready: false,
         version: String::new(),
         last_sample: 0,
+        selection_recovery: String::new(),
     };
     manager.log("Manager ready · q closes only the interface");
     let rt = tokio::runtime::Runtime::new()?;
@@ -1567,14 +2011,31 @@ pub fn daemon(dir: &Path) -> Result<()> {
         }
         let shutdown = matches!(serde_json::from_str::<Action>(&line), Ok(Action::Shutdown));
         let reply = match serde_json::from_str::<Action>(&line) {
-            Ok(action) => match rt.block_on(manager.handle(action)) {
-                Ok(r) => r,
-                Err(e) => {
-                    let r = Reply::error(e);
-                    manager.log(format!("Error: {}", r.message));
-                    r
+            Ok(action) => {
+                let mut private_sources: Vec<String> = match &action {
+                    Action::Import {
+                        source, user_agent, ..
+                    } => vec![source.clone(), user_agent.clone()],
+                    Action::PrepareRuleDraft { source, .. }
+                    | Action::ImportRules { source, .. } => vec![source.clone()],
+                    _ => vec![],
+                };
+                if let Some(pending) = &manager.pending {
+                    private_sources.extend(pending.items.iter().map(|p| p.sub.source.clone()));
                 }
-            },
+                match rt.block_on(manager.handle(action)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let mut r = Reply::error(e);
+                        r.message = redact_sources(
+                            &redact_error(&r.message, &manager.store),
+                            private_sources.iter().map(String::as_str),
+                        );
+                        manager.log(format!("Error: {}", r.message));
+                        r
+                    }
+                }
+            }
             Err(_) => Reply::error(anyhow::anyhow!("Invalid request")),
         };
         if serde_json::to_writer(&mut stream, &reply).is_ok() {
@@ -1691,8 +2152,15 @@ fn source_label(s: &str) -> String {
         .and_then(|u| u.host_str().map(|h| format!("{}://{h}/••••", u.scheme())))
         .unwrap_or_else(|| "Local / pasted source (hidden)".into())
 }
-fn redact_error(error: &str, store: &Store) -> String {
-    let mut e = error.to_string();
+pub(crate) fn redact_error(error: &str, store: &Store) -> String {
+    let mut e = redact_sources(
+        error,
+        store
+            .subscriptions
+            .iter()
+            .map(|s| s.source.as_str())
+            .chain(store.rule_resources.iter().map(|r| r.source.as_str())),
+    );
     for n in &store.nodes {
         for key in ["password", "uuid"] {
             if let Some(s) = n.outbound[key].as_str() {
@@ -1745,8 +2213,30 @@ fn redact_error(error: &str, store: &Store) -> String {
             e = e.replace(&secret, "[redacted]");
         }
     }
-    e = e.replace(&store.secret, "[redacted]");
-    model::clean(&e)
+    if !store.secret.is_empty() {
+        e = e.replace(&store.secret, "[redacted]");
+    }
+    model::clean_multiline(&e)
+}
+pub(crate) fn redact_sources<'a>(
+    error: &str,
+    sources: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut result = error.to_string();
+    for source in sources {
+        for line in source.lines().filter(|s| !s.is_empty()) {
+            result = result.replace(line, "[private value]");
+            if let Ok(url) = url::Url::parse(line) {
+                let mut parts = vec![url.username().to_string()];
+                parts.extend(url.password().map(str::to_string));
+                parts.extend(url.query_pairs().map(|(_, v)| v.into_owned()));
+                for part in parts.into_iter().filter(|p| !p.is_empty()) {
+                    result = result.replace(&part, "[private value]");
+                }
+            }
+        }
+    }
+    result
 }
 
 fn startup_error(dir: &Path, offset: u64, store: &Store) -> String {
@@ -1767,12 +2257,7 @@ fn startup_error(dir: &Path, offset: u64, store: &Store) -> String {
     };
     let detail = read().unwrap_or_default();
     if detail.is_empty() {
-        if store.settings.language == "zh" {
-            "请查看活动页或 core.log"
-        } else {
-            "see Activity / core.log"
-        }
-        .into()
+        "see Activity / core.log".into()
     } else {
         detail
     }
@@ -1981,6 +2466,516 @@ pub fn authorize_tun(dir: &Path, core: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    #[test]
+    fn failed_requests_redact_unsaved_sources_and_keep_long_diagnostics() {
+        let source = "https://fixture.invalid/sub?token=top-secret";
+        let message = format!(
+            "Failed {source}\nQuery token top-secret\n{}",
+            "details ".repeat(150)
+        );
+        let redacted = redact_sources(&message, [source]);
+        assert!(!redacted.contains("top-secret") && !redacted.contains("fixture.invalid"));
+        let reply = Reply::error(anyhow::anyhow!(redacted));
+        assert!(reply.message.len() > 512 && reply.message.contains('\n'));
+    }
+    #[tokio::test]
+    async fn native_remote_draft_is_atomic_cancelable_and_not_converted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let before = m.store.native.clone();
+        let p = m
+            .handle(Action::PrepareRuleDraft {
+                source: "https://fixture.invalid/video.srs?token=private".into(),
+                name: "Video".into(),
+                format: "auto".into(),
+                revision: native::revision(&m.store),
+            })
+            .await
+            .unwrap()
+            .rules_preview
+            .unwrap();
+        assert_eq!(p.format, "native-srs");
+        assert!(!serde_json::to_string(&p).unwrap().contains("token=private"));
+        assert!(m
+            .handle(Action::CommitRuleDraft {
+                id: p.draft_id.clone(),
+                revision: p.revision.clone(),
+                target: "missing".into(),
+                position: 0,
+                group: None
+            })
+            .await
+            .is_err());
+        assert_eq!(m.store.native, before);
+        m.handle(Action::CommitRuleDraft {
+            id: p.draft_id,
+            revision: p.revision,
+            target: "direct".into(),
+            position: 0,
+            group: None,
+        })
+        .await
+        .unwrap();
+        let doc = m.store.native.as_ref().unwrap();
+        assert_eq!(doc["route"]["rule_set"][0]["type"], "remote");
+        assert_eq!(doc["route"]["rule_set"][0]["format"], "binary");
+        assert!(m.store.rule_resources.is_empty());
+        assert_eq!(doc["dns"], before.unwrap()["dns"]);
+        let before = m.store.native.clone();
+        let p = m
+            .handle(Action::PrepareRuleDraft {
+                source: "https://fixture.invalid/video.json".into(),
+                name: String::new(),
+                format: "native-source".into(),
+                revision: native::revision(&m.store),
+            })
+            .await
+            .unwrap()
+            .rules_preview
+            .unwrap();
+        m.handle(Action::CancelRuleDraft(p.draft_id)).await.unwrap();
+        assert_eq!(m.store.native, before);
+    }
+    #[tokio::test]
+    async fn refresh_preview_retains_scope_and_recovers_from_fetch_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let source = dir.path().join("nodes.txt");
+        fs::write(&source, "trojan://fictional@127.0.0.1:9#A").unwrap();
+        let p = m
+            .prepare(
+                source.to_string_lossy().into(),
+                "A".into(),
+                String::new(),
+                None,
+            )
+            .await
+            .unwrap()
+            .preview
+            .unwrap();
+        m.store.settings.bypass_lan = !m.store.settings.bypass_lan;
+        let fresh = m
+            .handle(Action::ReprepareSubscriptions(p.id))
+            .await
+            .unwrap()
+            .preview
+            .unwrap();
+        assert_eq!(fresh.revision, native::revision(&m.store));
+        fs::write(&source, "<html>failure</html>").unwrap();
+        assert!(m
+            .handle(Action::ReprepareSubscriptions(fresh.id.clone()))
+            .await
+            .is_err());
+        assert_eq!(m.pending.as_ref().unwrap().id, fresh.id);
+        fs::write(&source, "trojan://fictional@127.0.0.1:9#A").unwrap();
+        let fresh = m
+            .handle(Action::ReprepareSubscriptions(fresh.id))
+            .await
+            .unwrap()
+            .preview
+            .unwrap();
+        assert_eq!(fresh.count, 1);
+        m.handle(Action::CommitSubscriptions {
+            id: fresh.id,
+            revision: fresh.revision,
+        })
+        .await
+        .unwrap();
+        assert_eq!(m.store.subscriptions.len(), 1);
+    }
+    fn draft_manager(dir: &Path) -> Manager {
+        let mut store = Store::new().unwrap();
+        let doc = native::migration(&store).unwrap();
+        native::adopt(&mut store, doc).unwrap();
+        store.native.as_mut().unwrap()["route"]["rules"] = json!([
+            {"action":"sniff"}, {"domain_suffix":["existing.invalid"],"action":"route","outbound":"direct"}
+        ]);
+        store.save(dir).unwrap();
+        Manager {
+            pending_rules: None,
+            lease: proxy_helper::Lease::start(dir),
+            connectivity: Default::default(),
+            dir: dir.into(),
+            store,
+            child: None,
+            tun: false,
+            running: None,
+            pending: None,
+            activity: vec![],
+            status: Default::default(),
+            groups: Default::default(),
+            api_ready: false,
+            version: String::new(),
+            last_sample: 0,
+            selection_recovery: String::new(),
+        }
+    }
+    async fn rule_draft(m: &mut Manager) -> Action {
+        let revision = native::revision(&m.store);
+        let p = m
+            .handle(Action::PrepareRuleDraft {
+                source: "HOST-SUFFIX,video.invalid,External\nUNSUPPORTED,ignored.invalid,External"
+                    .into(),
+                name: "Video".into(),
+                format: "qx".into(),
+                revision: revision.clone(),
+            })
+            .await
+            .unwrap()
+            .rules_preview
+            .unwrap();
+        assert_eq!(p.count, 1);
+        assert!(!p.warnings.is_empty());
+        Action::CommitRuleDraft {
+            id: p.draft_id,
+            revision: revision.clone(),
+            target: "media".into(),
+            position: 1,
+            group: Some(native::GroupChange {
+                revision,
+                original_tag: None,
+                name: "Media".into(),
+                value: json!({"type":"selector","tag":"media","outbounds":["direct"]}),
+            }),
+        }
+    }
+    async fn import_fixture(m: &mut Manager, source: &Path, name: &str) {
+        m.handle(Action::Import {
+            source: source.display().to_string(),
+            name: name.into(),
+            user_agent: String::new(),
+        })
+        .await
+        .unwrap();
+        m.handle(Action::CommitImport).await.unwrap();
+    }
+    #[tokio::test]
+    async fn update_all_previews_and_commits_once_preserving_native_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, "trojan://fixture@127.0.0.1:9#A").unwrap();
+        fs::write(&b, "trojan://fixture@127.0.0.1:10#B").unwrap();
+        import_fixture(&mut m, &a, "A").await;
+        import_fixture(&mut m, &b, "B").await;
+        let before = serde_json::to_value(&m.store).unwrap();
+        fs::write(
+            &a,
+            "trojan://fixture@127.0.0.1:9#A\ntrojan://fixture@127.0.0.1:11#A2",
+        )
+        .unwrap();
+        fs::write(
+            &b,
+            "trojan://fixture@127.0.0.1:10#B\ntrojan://fixture@127.0.0.1:12#B2",
+        )
+        .unwrap();
+        let p = m.handle(Action::RefreshAll).await.unwrap().preview.unwrap();
+        assert_eq!(p.sources.len(), 2);
+        assert_eq!(p.added, 2);
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        m.handle(Action::CancelSubscriptions("different-window".into()))
+            .await
+            .unwrap();
+        assert!(m.pending.is_some());
+        m.handle(Action::CommitSubscriptions {
+            id: p.id.clone(),
+            revision: p.revision.clone(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(m.store.nodes.len(), 4);
+        assert_eq!(
+            m.store.native.as_ref().unwrap()["dns"],
+            before["native"]["dns"]
+        );
+        assert_eq!(
+            m.store.native.as_ref().unwrap()["route"],
+            before["native"]["route"]
+        );
+        assert!(m
+            .handle(Action::CommitSubscriptions {
+                id: p.id,
+                revision: p.revision
+            })
+            .await
+            .is_err());
+        assert!(m.running.is_none() && m.child.is_none());
+        assert_eq!(Store::load(dir.path()).unwrap().native, m.store.native);
+    }
+    #[tokio::test]
+    async fn update_all_failure_cancel_and_stale_preview_preserve_saved_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, "trojan://fixture@127.0.0.1:9#A").unwrap();
+        fs::write(&b, "trojan://fixture@127.0.0.1:10#B").unwrap();
+        import_fixture(&mut m, &a, "A").await;
+        import_fixture(&mut m, &b, "B").await;
+        let before = serde_json::to_value(&m.store).unwrap();
+        fs::write(&b, "<html>expired</html>").unwrap();
+        assert!(m.handle(Action::RefreshAll).await.is_err());
+        assert!(m.pending.is_none());
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        fs::write(&b, "trojan://fixture@127.0.0.1:10#B").unwrap();
+        let p = m.handle(Action::RefreshAll).await.unwrap().preview.unwrap();
+        m.handle(Action::CancelSubscriptions(p.id.clone()))
+            .await
+            .unwrap();
+        assert!(m
+            .handle(Action::CommitSubscriptions {
+                id: p.id,
+                revision: p.revision
+            })
+            .await
+            .is_err());
+        let p = m.handle(Action::RefreshAll).await.unwrap().preview.unwrap();
+        m.store.settings.bypass_lan = !m.store.settings.bypass_lan;
+        assert!(m
+            .handle(Action::CommitSubscriptions {
+                id: p.id,
+                revision: p.revision
+            })
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Draft changed"));
+        assert_eq!(
+            serde_json::to_value(Store::load(dir.path()).unwrap()).unwrap(),
+            before
+        );
+    }
+    #[tokio::test]
+    async fn removing_referenced_subscription_nodes_is_a_non_destructive_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let a = dir.path().join("a.txt");
+        fs::write(&a, "trojan://fixture@127.0.0.1:9#A").unwrap();
+        import_fixture(&mut m, &a, "A").await;
+        let node = m.store.nodes[0].tag();
+        m.store.native.as_mut().unwrap()["route"]["rules"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"domain_suffix":["keep.invalid"],"outbound":node}));
+        m.store.save(dir.path()).unwrap();
+        let before = serde_json::to_value(&m.store).unwrap();
+        fs::write(&a, "trojan://fixture@127.0.0.1:11#Replacement").unwrap();
+        let p = m.handle(Action::RefreshAll).await.unwrap().preview.unwrap();
+        let e = m
+            .handle(Action::CommitSubscriptions {
+                id: p.id,
+                revision: p.revision,
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("still referenced") && e.contains("/route/rules/2/outbound"),
+            "{e}"
+        );
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        assert!(m.pending.is_some());
+    }
+    #[tokio::test]
+    async fn setup_initialization_requires_save_and_never_starts_the_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        m.store = Store::new().unwrap();
+        m.store.nodes = subscription::parse("trojan://fixture@127.0.0.1:9#A", "fixture")
+            .unwrap()
+            .nodes;
+        m.store.save(dir.path()).unwrap();
+        let before = serde_json::to_value(&m.store).unwrap();
+        let info = m
+            .handle(Action::ConnectionSetupInfo)
+            .await
+            .unwrap()
+            .edit
+            .unwrap();
+        let change = native::ConnectionSetup {
+            revision: info.revision,
+            target: Some("proxy".into()),
+            mode: "rule".into(),
+            capture: "port".into(),
+        };
+        let r = m
+            .handle(Action::ReviewConnectionSetup(change))
+            .await
+            .unwrap();
+        assert!(r.config.as_ref().unwrap().contains("Preview only"));
+        assert!(!r.config.as_ref().unwrap().contains("Apply restarts"));
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        assert!(!dir.path().join("pre-native-state.json").exists());
+        let action = r.confirm.unwrap();
+        let saved = m.handle(action.clone()).await.unwrap();
+        assert!(m.store.native.is_some());
+        assert!(dir.path().join("pre-native-state.json").exists());
+        assert!(matches!(saved.confirm, Some(Action::ApplyNative { .. })));
+        assert!(m.running.is_none() && m.child.is_none());
+        assert!(m.handle(action).await.is_err());
+    }
+    #[tokio::test]
+    async fn rule_group_route_commit_is_atomic_and_preserves_dns_and_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let before = serde_json::to_value(&m.store).unwrap();
+        let action = rule_draft(&mut m).await;
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(Store::load(dir.path()).unwrap()).unwrap(),
+            before
+        );
+        m.handle(action.clone()).await.unwrap();
+        let doc = m.store.native.as_ref().unwrap();
+        assert_eq!(doc["dns"], before["native"]["dns"]);
+        assert_eq!(
+            doc["route"]["rules"][0],
+            before["native"]["route"]["rules"][0]
+        );
+        assert_eq!(doc["route"]["rules"][1]["outbound"], "media");
+        assert_eq!(
+            doc["route"]["rules"][2],
+            before["native"]["route"]["rules"][1]
+        );
+        assert_eq!(m.store.rule_resources.len(), 1);
+        assert_eq!(m.store.display_names["media"], "Media");
+        assert!(m.pending_rules.is_none());
+        assert_eq!(Store::load(dir.path()).unwrap().native, m.store.native);
+        assert!(m.handle(action).await.is_err()); // A preview cannot be saved twice.
+        assert!(m.child.is_none() && m.running.is_none());
+    }
+    #[tokio::test]
+    async fn failed_or_cancelled_rule_drafts_never_leave_an_orphan_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let action = rule_draft(&mut m).await;
+        let before = serde_json::to_value(&m.store).unwrap();
+        for case in 0..5 {
+            let mut bad = action.clone();
+            if let Action::CommitRuleDraft {
+                id,
+                target,
+                position,
+                group,
+                ..
+            } = &mut bad
+            {
+                match case {
+                    0 => *position = 999,
+                    1 => *id = "replaced-preview".into(),
+                    2 => *target = "direct".into(),
+                    3 => group.as_mut().unwrap().value["outbounds"] = json!([]),
+                    _ => group.as_mut().unwrap().revision = "stale".into(),
+                }
+            }
+            assert!(m.handle(bad).await.is_err());
+            assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+            assert_eq!(
+                serde_json::to_value(Store::load(dir.path()).unwrap()).unwrap(),
+                before
+            );
+            assert!(m.pending_rules.is_some());
+        }
+        let id = m.pending_rules.as_ref().unwrap().id.clone();
+        m.handle(Action::CancelRuleDraft("another-window".into()))
+            .await
+            .unwrap();
+        assert!(m.pending_rules.is_some());
+        m.handle(Action::CancelRuleDraft(id)).await.unwrap();
+        assert!(m.pending_rules.is_none());
+        assert!(m.handle(action).await.is_err());
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        let action = rule_draft(&mut m).await;
+        m.store.native.as_mut().unwrap()["dns"]["timeout"] = json!("7s");
+        assert!(m
+            .handle(action)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Draft changed"));
+        assert!(m.store.display_names.is_empty());
+    }
+    #[tokio::test]
+    async fn rule_save_io_error_keeps_preview_for_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let action = rule_draft(&mut m).await;
+        let before = serde_json::to_value(&m.store).unwrap();
+        let blocked = dir.path().join("not-a-directory");
+        fs::write(&blocked, b"fixture").unwrap();
+        m.dir = blocked;
+        assert!(m.handle(action.clone()).await.is_err());
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        assert!(m.pending_rules.is_some());
+        m.dir = dir.path().into();
+        m.handle(action).await.unwrap();
+    }
+    #[tokio::test]
+    async fn native_rule_import_and_refresh_preserve_compound_and_future_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let source = dir.path().join("native-rules.json");
+        let mut doc = json!({"version":3,"rules":[
+            {"type":"logical","mode":"and","rules":[{"domain_suffix":["native.invalid"]},{"process_name":["Fixture"]}]},
+            {"domain":["future.invalid"],"future_predicate":{"must_preserve":true}}
+        ]});
+        fs::write(&source, doc.to_string()).unwrap();
+        let dns = m.store.native.as_ref().unwrap()["dns"].clone();
+        let revision = native::revision(&m.store);
+        let p = m
+            .handle(Action::PrepareRuleDraft {
+                source: source.display().to_string(),
+                name: "Native".into(),
+                format: "auto".into(),
+                revision: revision.clone(),
+            })
+            .await
+            .unwrap()
+            .rules_preview
+            .unwrap();
+        assert_eq!(p.format, "native");
+        assert_eq!(p.count, 2);
+        assert!(p.warnings.is_empty());
+        m.handle(Action::CommitRuleDraft {
+            id: p.draft_id,
+            revision,
+            target: "direct".into(),
+            position: 0,
+            group: None,
+        })
+        .await
+        .unwrap();
+        let resource = m.store.rule_resources[0].clone();
+        assert_eq!(resource.native_document, Some(doc.clone()));
+        assert_eq!(
+            m.store.native.as_ref().unwrap()["route"]["rule_set"][0]["rules"],
+            doc["rules"]
+        );
+        let routes = m.store.native.as_ref().unwrap()["route"]["rules"].clone();
+        doc["rules"][0]["rules"][0]["domain_suffix"] = json!(["updated.invalid"]);
+        fs::write(&source, doc.to_string()).unwrap();
+        m.handle(Action::RefreshRules(resource.id.clone()))
+            .await
+            .unwrap();
+        m.handle(Action::CommitRules).await.unwrap();
+        assert_eq!(
+            m.store.native.as_ref().unwrap()["route"]["rule_set"][0]["rules"],
+            doc["rules"]
+        );
+        assert_eq!(m.store.native.as_ref().unwrap()["route"]["rules"], routes);
+        assert_eq!(m.store.native.as_ref().unwrap()["dns"], dns);
+        // A user's local rule-set edit must never be replaced by refresh.
+        m.store.native.as_mut().unwrap()["route"]["rule_set"][0]["rules"][0]["invert"] =
+            json!(true);
+        doc["rules"][0]["mode"] = json!("or");
+        fs::write(&source, doc.to_string()).unwrap();
+        let before = m.store.native.clone();
+        m.handle(Action::RefreshRules(resource.id)).await.unwrap();
+        assert!(m.handle(Action::CommitRules).await.is_err());
+        assert_eq!(m.store.native, before);
+    }
     #[tokio::test]
     #[ignore = "Loopback-only HTTP proxy responses; no public endpoint or real node"]
     async fn connectivity_probe_requires_204_and_does_not_follow_redirects() {
@@ -2053,6 +3048,7 @@ mod tests {
             api_ready: false,
             version: String::new(),
             last_sample: 0,
+            selection_recovery: String::new(),
         };
         let response = m.handle(Action::Connect).await;
         if let Err(e) = &response {
@@ -2122,6 +3118,35 @@ mod tests {
         assert!(m.handle(Action::Connect).await.is_err());
         assert!(m.connected());
         assert_eq!(m.running.as_ref().unwrap().settings.port, old_port);
+        m.store.settings.port = old_port;
+        let doc = native::migration(&m.store).unwrap();
+        native::adopt(&mut m.store, doc).unwrap();
+        m.handle(Action::Connect).await.unwrap();
+        let member = m.store.nodes[0].tag();
+        m.handle(Action::SelectNative {
+            group: "proxy".into(),
+            member: member.clone(),
+        })
+        .await
+        .unwrap();
+        let remembered = fs::read(dir.path().join("selections.json")).unwrap();
+        let draft = m.store.native.clone();
+        let secret = std::mem::replace(&mut m.store.secret, "wrong-api-secret".into());
+        assert!(m
+            .handle(Action::SelectNative {
+                group: "proxy".into(),
+                member
+            })
+            .await
+            .is_err());
+        let failed = m.snapshot().await;
+        assert!(failed.connected && !failed.api_ready && failed.groups.group.is_empty());
+        assert_eq!(
+            fs::read(dir.path().join("selections.json")).unwrap(),
+            remembered
+        );
+        assert_eq!(m.store.native, draft);
+        m.store.secret = secret;
         m.handle(Action::Disconnect).await.unwrap();
         assert!(!m.connected());
         println!("PASS: config check, native gRPC, live selector, local HTTP proxy, failed import preservation, failed apply rollback, disconnect");

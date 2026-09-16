@@ -1,34 +1,38 @@
 # sing
 
-A native terminal client for sing-box on macOS and Linux. Rust + Ratatui; runtime control uses the official sing-box 1.14+ gRPC service. No Clash core or online conversion service is required.
+An English terminal client for sing-box on macOS and Linux. Runtime control uses the official sing-box 1.14+ gRPC service, not a Clash compatibility layer. Subscription and QX/Clash rule conversion happen locally.
 
-## 0.5.0 — native configuration workspace
+## 0.6.0 — product workspaces
 
-The native JSON document is now authoritative. Forms edit individual subtrees of that same document; fields not edited by a form are preserved. Node subscriptions and converted rule-list metadata live outside that document. Resource refreshes update their owned objects, not the entire configuration.
+Five workspaces, visible keyboard actions, and one authoritative native configuration:
 
-The UI is English-only; names in subscriptions and user-created objects retain their original language.
+| Workspace | Pages |
+|---|---|
+| Overview | Status, connection setup, common groups |
+| Proxies | Proxy Groups, Nodes, Subscriptions |
+| Routing | Rules, Rule Sets |
+| Network | Capture, Inbounds, DNS → Servers / Rules / Options |
+| Activity | Connections, Logs, Diagnostics |
 
-### 0.5.1 — top navigation and visible actions
+Settings is a global button: Core, Interface, Client, Advanced Tools. Advanced Tools keeps access to endpoints, services, experimental options and the complete native document; it does not duplicate DNS or TUN editors.
 
-Top tabs replace the sidebar, with direct page keys and compact actions shown on each page. Outbounds has a `g` group shortcut; import and conversion controls are visible under Resources. Advanced lists only sections without dedicated pages, while `E` still opens the complete document. This UI-only update keeps manager protocol 6: from 0.5.0, close the interface with `q` and reopen `./sing`; no shutdown or migration is needed.
+This release implements the main product workflows. The built executable has been tested on macOS arm64 with sing-box 1.14.0. **Real System Proxy/TUN, Linux/SSH host recovery and first-time user acceptance remain unverified.** See [acceptance and limitations](docs/acceptance-0.6.0.md). This is not a claim of comprehensive platform validation or improved video throughput.
 
-This is the first implementation of the new architecture, not a claim that every native field has a dedicated form or that all platforms have been validated. The selected core validates the configuration before application. Version 1.14.0 is the tested baseline; feature availability also depends on platform and core build.
+## Upgrade safely
 
-## Upgrade from 0.4.1
+0.6.0 requires manager protocol **9**. Replacing the executable does not restart an existing manager or change networking.
 
-The local Git tag `v0.4.1-baseline` preserves the old source. The old macOS arm64 executable is separately preserved at `.build/backups/v0.4.1/sing` (excluded from Git).
+1. Close old interfaces with `q`.
+2. When you are ready to interrupt the current connection, run `./sing --shutdown`. This restores sing-managed proxy settings and stops the old manager/core. If restoration fails, resolve it before continuing.
+3. Run `./sing`.
+4. Existing native drafts remain intact. For a pre-native configuration, use the offered initialization review: a private `pre-native-state.json` backup is created before adoption.
+5. Use **Review Changes**, inspect the summary / **Native Diff**, then explicitly choose **Apply**.
 
-1. Close old sing interfaces with `q`.
-2. Run `./sing --shutdown`. This restores managed system proxy settings and stops the old core. If restoration fails, resolve that error before upgrading.
-3. Run `./sing` again. The new UI requires manager protocol **6**; it never silently restarts an old manager.
-4. On Overview, press `u` to review the native migration, then Enter to accept it. A private `pre-native-state.json` backup is created in the application data directory before schema 2 is saved. Migration alone does **not** start/restart a core or change host networking.
-5. Review your configuration and press `A` for **Review & Apply**. Enter confirms application; the core performs validation first.
+No application data was migrated or network takeover enabled during development. The source baseline is Git commit `b476cdb`. The previous 0.5.1 executable is backed up locally under `.build/backups/v0.5.1-f70AYn2u/sing`; generated binaries/backups are excluded from Git.
 
-The previous routing policy and DNS are materialized into editable native objects once. Subsequent routing/DNS edits are independent. A fresh empty configuration includes an empty default selector: import nodes before using that selector, or remove it and choose a valid direct-only configuration.
+Do not downgrade an active data directory blindly. Preserve it first; stop its manager before restoring a compatible private state backup. Git contains source, not subscription credentials or runtime state.
 
-Do not open the schema-2 data directory with old versions. For a downgrade: stop the new manager, preserve the new data separately, and restore the private `pre-native-state.json` as `state.json` before launching the backed-up 0.4.1 executable. Do not copy active sockets or delete live runtime state. Git is a source backup, not a credential/data backup.
-
-## Build and run
+## Run
 
 ```sh
 cargo build --release --locked
@@ -37,93 +41,93 @@ cargo build --release --locked
 ./sing --preview
 ```
 
-`--demo` uses fictional, in-memory data and performs no network operations. `--preview` prints a static terminal preview. Minimum terminal size: 54 × 18; top tabs wrap to fit the terminal. At 115 columns, pages show a list/detail split.
+The launcher prefers `target/release/sing`. `--demo` uses fictional in-memory data and never changes the network; it is not a substitute for real import/network tests. `--preview` prints a static sample. `--data-dir /absolute/path` selects an independent private instance.
 
-The `./sing` launcher prefers `target/release/sing`. Rebuild release after changing the code, or run the debug binary explicitly during development.
+Use 80 × 24 or larger; 54 × 18 is supported with scrolling. Wide terminals show a list/detail split. No mouse or special icon font is required.
 
-## Navigation
+## Three common tasks
 
-```text
-1 Overview   2 Inbounds   3 Outbounds   4 Routing   5 DNS
-6 Resources  7 Advanced   8 Connections 9 Logs      0 Diagnostics  - Settings
-```
+### Import a subscription and connect
 
-- `1`–`9`, `0`, `-`: open the corresponding top tab directly. `Tab` focuses navigation; left/right chooses a page, Enter returns to content. Arrows or `j`/`k` move within lists. Navigation never replaces page content.
-- `[` / `]`: switch a page's subpages. `/`: filter; Esc clears the filter.
-- `a`: add; `e`: form; `E`: native JSON; `x`: remove. `Enter`: details or a selector's member picker.
-- `g` in Outbounds: create a manual or automatic group. Overview `a` and Resources / Subscriptions `a`: import a node subscription. Resources / Rule sets `C`: import and convert a QX/Clash rule list, choosing its routing target in the same form.
-- `F2` / `Ctrl+S`: save the draft. Esc cancels the current editor. Space or left/right cycles choices; Space opens a member picker.
-- `A`: Review & Apply; `V`: core validation; `p`: redacted effective configuration preview.
-- `c`: Start, only when stopped; `d`: Stop and restore managed proxy settings; `q`: close the UI without stopping the manager/core.
-- `?`: contextual help. `M`: explicit traffic-routing override.
+Choose **Import Subscription** on Overview or Proxies. Paste a subscription URL, supported node links, common Clash node YAML, sing-box node JSON, or a local path. This imports nodes, **not** another client's whole DNS/routing configuration.
 
-Structural changes remain draft changes until Apply. Application restarts the core and interrupts connections. A loaded selector's member can be changed through gRPC without restarting the entire core. Its selected member is also persisted in the native draft. Edited/new group membership must be applied before selecting a member not loaded by the core.
+Name is optional. Expand **Advanced** only if your provider requires a User-Agent.
 
-### Inbounds and system integration
+Review → **Save & Set Up** → choose target, mode and capture → **Review Setup** → **Save Draft** → separate **Review Changes / Apply**. **Save Only** ends after importing; Overview's **Connection Setup** resumes later. Existing DNS, rules and complex listeners are not reset.
 
-Manage multiple native listeners. Forms cover local mixed listeners and TUN addresses, stack, route settings, interface DNS mode and MTU. Use native JSON for additional listener types/fields. Listener authentication is native `users` JSON; do not expose an unauthenticated proxy publicly.
+Capture choices:
 
-`s` opens system integration. `port` means no system-proxy takeover; `system` enables macOS proxy management against the specified local mixed-proxy port. The matching unauthenticated loopback mixed inbound must exist in the document. This port also serves the client's explicit connectivity check and subscription-download proxy fallback. System integration does not rewrite listeners.
+- **Proxy Ports**: configure individual applications to use the local HTTP/SOCKS listener. Merely starting a core does not proxy every application.
+- **System Proxy**: local macOS only; supported applications use OS proxy settings. Requires explicit authorization and a matching loopback listener.
+- **TUN**: an actual native inbound, requiring administrator authorization. It can affect routes and interface DNS, and interrupt SSH. Existing TUN objects remain editable in Inbounds.
+- **Keep current capture** preserves complex configurations. Switching to Ports/System does not silently delete existing TUN listeners.
 
-TUN is determined by the document's inbounds, independently of macOS system-proxy integration. TUN requires explicit administrator authorization and can interrupt SSH. In 1.14, TUN `dns_mode` defaults to `hijack`, which includes platform interface-DNS configuration where available. It is incorrect to assume TUN never changes native DNS settings. Application-owned DoH may follow another path.
+Over SSH, sing controls the **remote host**, not your local computer. Linux desktop system-proxy integration is not provided.
 
-Linux has no automatic desktop system-proxy integration in this release. SSH always controls the host on which sing runs, not the local computer displaying the SSH session. Linux/TUN/SSH recovery and dual-stack behavior still require dedicated real-host acceptance testing. The existing TUN helper is experimental, not a guaranteed crash-safe network recovery service.
+Subscriptions has **Update**, **Update All**, preview/cancel and **Refresh Preview**. Batch updates save once; a failed source does not partially update the draft. Owned nodes with local edits or surviving references are reported as conflicts, not silently overwritten/deleted.
 
-### Outbounds
+### Create a proxy group
 
-Nodes, `direct`, `selector` and `urltest` groups share one list. Group membership may reference other groups/endpoints; cycles and missing members are rejected before application. Names are shown in pickers while native tags remain the references. Changing a tag does not automatically rename every reference: repair references before Apply.
+Proxies → **New Group**. Set a display name, choose Manual (selector) or Automatic (urltest), search by name/source, select members, choose the manual default, then save once.
 
-`t` requests a native URL latency test for the selected loaded outbound. Results appear beside outbounds when returned by the core. URLTest groups use their native URL/interval/tolerance; the default template tests gstatic every three minutes while running. Latency is not bandwidth or streaming-unlock capability.
+Group/endpoint members and unknown native fields are preserved. Empty groups, invalid defaults and cycles are rejected. Display names do not rename stable native tags. Automatic groups expose their test URL, interval and tolerance; lowest latency does not guarantee best throughput or streaming access.
 
-Native JSON retains protocol-specific TLS, transport, multiplexing and dial settings. The form does not silently normalize or discard fields it does not expose. Advanced fields are not generic speed switches.
+**Select Member** controls a running manual group. sing waits for an API readback before calling it selected, and remembers successful choices separately in private `selections.json`. Runtime selection does not edit the native default or create a pending structural draft.
 
-### Routing and DNS
+On Start/Apply, a remembered choice is eligible only if its group/member remain valid and the default has not changed. Automatic groups remain core-controlled. With native cache-file restoration enabled, sing leaves recovery to the core. Restoration failure is shown on Overview/Activity; cached choices are never displayed as live evidence. Existing connections may retain their old route.
 
-Routing has one ordered native rules list and an Options subpage for `final`, interface detection and the default resolver for server hostnames. `J`/`K` moves a rule. Ordinary match fields accept comma-separated lists; logical rules retain nested native conditions. Additional conditions/actions remain editable through JSON.
+When stopped, use **Edit** to change the default member, or start the core before choosing a live member.
 
-DNS has **Resolvers / Rules / Options**. Add named local, UDP, TCP, TLS, HTTPS, QUIC, HTTP/3 or FakeIP resolvers. Configure server IP/hostname, custom port/path, outbound detour and bootstrap resolver. Blank detour means direct dialing; do not select an empty direct outbound as a DNS detour. DNS rules and final resolver are independent of website routing. Cache, timeout, IP preference, optimistic caching and reverse mapping have option fields; richer values survive form round trips.
+### Import and route a rule set
 
-`M` exposes Rule / Global / Direct as client traffic-routing overrides:
+Routing → **Import Rule Set** → source/format → target and insertion position → **Save Rule to Draft** → Review/Apply. **New Group** inside this flow is staged with the resource and route: cancel leaves no orphan group.
 
-- Rule runs the original native route rules.
-- Global/Direct replace traffic routing decisions, retaining sniff/DNS-hijack actions and an optional explicit private-IP exception.
-- **DNS servers/rules and their outbound dependencies are unchanged.** Direct is therefore not a promise that internal DNS traffic avoids all proxy nodes. Review explains this before Apply. No automatic fallback to direct is added when a node fails.
+Formats:
 
-The DNS template tests validate syntax with the actual 1.14 core; they do not measure resolver reachability, DNS leakage, video performance or throughput. FakeIP configuration support is not a claim of tested end-to-end FakeIP behavior on each platform.
+- **auto / qx / clash / domain / ipcidr**: supported external list conditions are converted locally. Read conversion warnings before accepting exclusions; foreign policy names are not executed.
+- **native**: native JSON source conditions, including logical rules, are preserved as an inline resource. No flattening through the external converter.
+- **native-source / native-srs**: retain native local/remote references and source/binary formats. Auto recognizes URLs/paths ending in `.srs`. File paths are resolved on the host running sing. No rule count is invented: content is loaded by the selected core on Apply/Start.
+- More native HTTP, cache, interval or other fields are available in the same resource's editor/Native JSON. Remote-resource updates belong to the core, not **Update Converted**.
 
-### Resources
+Import does not change DNS. One native rule set can be used by both Route and DNS. First matching terminal routing actions and original ordering remain meaningful; nonterminal and logical rules are preserved.
 
-Subscriptions: `a` imports a URL, supported node URI, pasted content or local file; `r` previews refresh; Enter confirms and Esc cancels. URI/base64, common Clash YAML node entries and sing-box node JSON are converted locally. This does not adopt a foreign full configuration's DNS/routes.
+## Navigation and editing
 
-Rule sets: `a` adds native inline/local/remote JSON or SRS references; `C` converts a common QX/Clash/domain/CIDR list and appends a native routing rule to the chosen target. Review unsupported entries before accepting partial conversion. Complex native rule sets should be used natively, not sent through the simplified cross-format converter.
+- `1`–`5`: the five workspaces. `,`: Settings.
+- `Tab` / `Shift+Tab`: move focus between visible controls. Arrows choose; Enter activates. Text fields take precedence over global shortcuts.
+- `/`: filter the current list. `:` or **Actions / More**: searchable actions.
+- `a` Add, `e` Edit, `E` Native JSON, `x` Remove; `J/K` reorder rules.
+- `F2` / `Ctrl+S` or the visible Save button: save a draft. Save is not Apply.
+- **References** shows Uses / Used by; **Back to References** restores the original list/filter/selection. Removal/rename cannot leave recognized native references dangling. Atomic edits to the full native document can update definitions and references together.
+- `A` / **Review Changes**: readable summary, expandable redacted Native Diff, explicit Apply. Application validates first, then restarts the core and can interrupt connections.
+- `M`: Rule / Global / Direct. Global/Direct override traffic routing without deleting saved rules. DNS and internal dial paths are not implicitly rewritten; Direct is not an unconditional no-proxy guarantee for internal DNS.
+- `t`: URL latency test, not a bandwidth test. `V`: core configuration check. `v` on Overview: explicit HTTPS connectivity probe.
+- `q`: close only the interface; a running manager/core stays active. Stop / `d` restores managed proxy settings before stopping.
 
-Native remote resources use sing-box's own HTTP client/update/cache settings. Converted resources are fetched/updated by sing with a confirmation preview, using direct download first and the running local proxy as fallback. `r` refreshes converted resources without rewriting DNS or existing native routing decisions. Native remote resources update according to their configured core policy; `r` is not a forced native-resource refresh operation.
+Failed submitted operations retain the original editor/preview behind an error-details view. Back does not automatically retry a write. If an apply review becomes stale, close it and request Review Changes again. Rule **Change Source** reloads current context while keeping entered source and the staged group; changed order requires position review. Subscription **Refresh Preview** re-fetches the original preview's sources.
 
-Subscription updates never silently overwrite a locally modified node object. Rename its native tag to detach the local copy, then refresh the source. Existing nonempty selector membership is explicit, not automatically expanded or repaired after node removals. Broken references must be resolved before applying. Removing/detaching a converted native rule set also removes its conversion metadata; native routing references remain visible for repair.
+## Native capabilities and privacy
 
-### Advanced, diagnostics and privacy
+The native JSON document is authoritative. Forms modify their fields and retain unknown siblings. Native JSON provides fields without dedicated forms; preservation is semantic JSON, not comments/whitespace. The selected core determines version/platform validity.
 
-Advanced lists sections without dedicated pages (such as endpoints, services and experimental options); DNS, Routing, Inbounds and Outbounds are not duplicated there. `E` edits the entire document as strict JSON, including TLS, cache and other version-supported capabilities. Unknown fields and ordered arrays are preserved on save. This is semantic JSON preservation, not preservation of comments or whitespace. Invalid drafts may be saved for further editing; Apply runs reference checks and `sing-box check` before stopping a running instance.
+The protected `management` API service must retain its loopback address, port, secret and non-TLS transport. Change its port through Settings. Native profiles that remove this integration cannot be controlled by sing.
 
-The `management` API service is a protected integration point: keep its loopback address, non-TLS transport and secret. Change its port through Settings, which updates the matching native field. Other native services remain untouched. A complete externally sourced config requires retaining this service before sing can manage it.
+DNS Servers / Rules / Options are independent: website resolution, final DNS, bootstrap/default domain resolver and outbound detour have different roles. Blank DNS detour means direct dialing. Additional TLS, transport, FakeIP, logical/process rules and advanced inbound/outbound settings remain accessible natively; supporting an editor is not evidence of measured DNS leakage or performance.
 
-Native editing exposes credentials intentionally. Normal snapshots, previews and logs redact known sensitive fields, but do not share raw-editor screenshots or assume arbitrary unknown extension fields can be automatically classified as secrets. Revision checks prevent a stale native editor or Apply confirmation from overwriting a newer draft. Application failure attempts to restore the last running configuration; it cannot guarantee recovery from arbitrary host/network failures.
+Connections shows actual core observations, not a predicted route. Logs/Diagnostics, core/API readiness, capture and Internet checks are separate. Not all applications expose process identity.
 
-Connections shows core observations, not predicted rule matches. `h` includes recent closed connections, `x` closes one, and `r` refreshes. The manager limits displayed samples to 500 records; this is not complete traffic history. Logs and local Diagnostics are separate from the explicit `v` HTTPS connectivity probe. Browser slowness has not been proven fixed by this release.
+Sources, known credentials, normal snapshots and diffs are redacted. Raw native editors intentionally expose secrets; unknown extension fields cannot be universally classified. Do not share raw-editor screenshots, `state.json`, `runtime.json` or private data backups.
 
-Runtime files remain in the user's private data directory. Existing `sbtui` directories are still found to avoid orphaning a running manager. `--data-dir` selects an isolated instance. Source Git excludes runtime files, logs, credentials and builds.
-
-## Verification
+## Verification and remaining limits
 
 ```sh
 cargo test --offline --locked
 cargo fmt --check
-cargo clippy --offline --all-targets -- -D warnings
-
-SING_TEST_CORE=/absolute/path/to/sing-box cargo test --offline -- \
+cargo clippy --offline --locked --all-targets -- -D warnings
+SING_TEST_CORE=/absolute/path/to/sing-box cargo test --offline --locked -- \
   --ignored --skip install_official_core --skip public_youtube_rule_conversion --nocapture
 ```
 
-The explicit suite uses temporary fictional data, loopback servers and a read-only macOS inventory check. System-proxy writes are tested with a MOCK helper. No user subscription, real system-proxy write, TUN activation or public DNS/bandwidth test is included. Tests cover migration backup and redaction, native round trips, stale edits/reviews, resolver template validation, nested selectors, draft-vs-running state, apply/rollback, cross-format imports and existing lifecycle behavior.
+The explicit suite uses temporary fictional data, loopback services, a MOCK system-proxy helper and read-only macOS inventory. It never enables real proxy/TUN takeover.
 
-Remaining work includes full platform acceptance, richer native-field forms, native full-profile import assistance, DNS/path timing diagnostics, subscription scheduling, automatic membership policies and hardened service/autostart integration. The architecture keeps native capabilities accessible without claiming all these workflows are finished.
+See [0.6.0 acceptance](docs/acceptance-0.6.0.md) for passed versus untested items. Full-profile import assistance, DNS/path timing diagnostics, subscription scheduling, dynamic group membership and hardened autostart services are outside this release. Real provider reachability, DNS leakage, throughput and device-wide takeover still need host-specific testing.

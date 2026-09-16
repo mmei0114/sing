@@ -138,7 +138,7 @@ impl Field {
 #[derive(Clone)]
 pub(super) enum FormAction {
     Native(Edit),
-    Import,
+    Import { advanced: bool },
     Convert,
     Settings(model::Settings),
 }
@@ -150,6 +150,27 @@ pub(super) struct Form {
     pub action: FormAction,
 }
 impl Form {
+    pub fn visible_fields(&self) -> usize {
+        if matches!(self.action, FormAction::Import { advanced: false }) {
+            2
+        } else {
+            self.fields.len()
+        }
+    }
+    pub fn submit_focus(&self) -> usize {
+        self.visible_fields() + usize::from(matches!(self.action, FormAction::Import { .. }))
+    }
+    pub fn toggle_advanced(&mut self) -> bool {
+        if self.selected != self.visible_fields() {
+            return false;
+        }
+        if let FormAction::Import { advanced } = &mut self.action {
+            *advanced = !*advanced;
+            self.selected = self.visible_fields();
+            return true;
+        }
+        false
+    }
     pub fn submit(&self) -> Result<Action> {
         let get = |key: &str| {
             self.fields
@@ -179,11 +200,18 @@ impl Form {
                 }
                 Ok(Action::WriteNative(e))
             }
-            FormAction::Import => Ok(Action::Import {
-                source: get("source"),
-                name: get("name"),
-                user_agent: get("user_agent"),
-            }),
+            FormAction::Import { .. } => {
+                let source = get("source");
+                anyhow::ensure!(
+                    !source.trim().is_empty(),
+                    "Enter a subscription URL, node links, or local file."
+                );
+                Ok(Action::Import {
+                    source,
+                    name: get("name"),
+                    user_agent: get("user_agent"),
+                })
+            }
             FormAction::Convert => Ok(Action::ImportRules {
                 source: get("source"),
                 name: get("name"),
@@ -488,7 +516,7 @@ pub(super) fn templates(path: &str) -> Vec<(String, Value)> {
     let values = match path {
         "/inbounds" => vec![
             json!({"type":"mixed","tag":"local-proxy","listen":"127.0.0.1","listen_port":2081}),
-            json!({"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed","dns_mode":"hijack"}),
+            native::tun_template(),
         ],
         "/outbounds" => vec![
             json!({"type":"selector","tag":"new-group","outbounds":[]}),

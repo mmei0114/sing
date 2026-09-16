@@ -294,6 +294,25 @@ impl Api {
             .await?;
         Ok(())
     }
+    pub async fn select_confirmed(&mut self, group: String, tag: String) -> Result<Groups> {
+        self.select_group(group.clone(), tag.clone()).await?;
+        for attempt in 0..4 {
+            let groups = self.groups().await?;
+            if groups
+                .group
+                .iter()
+                .any(|g| g.tag == group && g.selected == tag)
+            {
+                return Ok(groups);
+            }
+            if attempt < 3 {
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+            }
+        }
+        anyhow::bail!(
+            "Selection was sent but not confirmed by the core. Refresh groups before retrying."
+        )
+    }
     pub async fn test(&mut self, tag: String) -> Result<()> {
         let _: Empty = self
             .unary("/daemon.StartedService/URLTest", Test { outbound_tag: tag })

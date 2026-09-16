@@ -15,6 +15,58 @@ pub struct Parsed {
     pub input_count: usize,
     pub format: String,
 }
+/// Preserve native headless rules exactly; validity is checked by the selected
+/// core on Apply, not approximated by the external-list converter.
+pub fn native_document(text: &str, hint: &str) -> Result<Option<Value>> {
+    ensure!(text.len() <= LIMIT, "Rule resource exceeds 8 MiB");
+    let parsed = serde_json::from_str::<Value>(text.trim().trim_start_matches('\u{feff}'));
+    let Ok(doc) = parsed else {
+        let yaml = serde_yaml::from_str::<Value>(text).ok();
+        ensure!(
+            !yaml.is_some_and(|d| d.get("version").is_some() && d.get("rules").is_some()),
+            "Native rule-sets must be JSON; no native conditions were converted"
+        );
+        ensure!(
+            hint != "native",
+            "Expected native JSON; use Add Native Rule Set for binary SRS"
+        );
+        return Ok(None);
+    };
+    if doc.get("version").is_none() || doc.get("rules").is_none() {
+        ensure!(
+            hint != "native",
+            "Expected a standalone native rule-set, not a full configuration"
+        );
+        return Ok(None);
+    }
+    ensure!(
+        hint == "auto" || hint == "native",
+        "Native rule-set conflicts with selected format"
+    );
+    ensure!(
+        doc.as_object()
+            .is_some_and(|m| m.keys().all(|k| ["version", "rules"].contains(&k.as_str()))),
+        "Expected a standalone native rule-set, not a full configuration"
+    );
+    ensure!(
+        doc["version"]
+            .as_u64()
+            .is_some_and(|v| (1..=5).contains(&v)),
+        "Unsupported native rule-set version"
+    );
+    let rules = doc["rules"]
+        .as_array()
+        .context("Native rules must be a list")?;
+    ensure!(
+        !rules.is_empty() && rules.len() <= MAX_RULES,
+        "Native rule-set must contain 1–50000 rules"
+    );
+    ensure!(
+        rules.iter().all(Value::is_object),
+        "Each native rule must be an object"
+    );
+    Ok(Some(doc))
+}
 pub fn validate_match(rule: &MatchRule) -> Result<()> {
     let v = &rule.value;
     ensure!(
@@ -336,6 +388,21 @@ pub fn domain_rules(rules: &[MatchRule]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_document_is_not_a_lossy_converter_or_full_config_import() {
+        let doc = json!({"version":3,"rules":[{"type":"logical","mode":"and","rules":[{"domain":["a.invalid"]},{"process_name":["app"]}],"future_field":true}]});
+        assert_eq!(
+            native_document(&doc.to_string(), "auto").unwrap(),
+            Some(doc.clone())
+        );
+        assert!(native_document(&doc.to_string(), "qx").is_err());
+        assert!(native_document("version: 3\nrules:\n  - domain: [a.invalid]", "auto").is_err());
+        assert!(native_document(r#"{"version":3,"rules":[],"outbounds":[]}"#, "auto").is_err());
+        assert!(native_document("not-json", "native").is_err());
+        assert!(native_document("DOMAIN-SUFFIX,a.invalid", "auto")
+            .unwrap()
+            .is_none());
+    }
     #[test]
     fn qx_common_predicates_and_explicit_loss_report() {
         let p = parse("# sample\nHOST-SUFFIX,googlevideo.com,YouTube\nHOST,music.youtube.com,YouTube\nIP6-CIDR,2620:120:e000::/40,YouTube\nUSER-AGENT,*youtube*,YouTube\nHOST-WILDCARD,youtube.*,YouTube", "auto").unwrap();

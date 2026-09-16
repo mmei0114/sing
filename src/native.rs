@@ -1,5 +1,8 @@
 //! Native documents are authoritative. Import metadata never rebuilds a document.
-use crate::{config, model::Store, ruleset};
+pub mod links;
+pub mod resource;
+pub mod review;
+use crate::{config, model::Store};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -10,6 +13,323 @@ pub struct Edit {
     pub revision: String,
     pub pointer: String,
     pub value: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupChange {
+    pub revision: String,
+    pub original_tag: Option<String>,
+    pub name: String,
+    pub value: Value,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnectionSetup {
+    pub revision: String,
+    pub target: Option<String>,
+    pub mode: String,
+    pub capture: String,
+}
+pub fn tun_template() -> Value {
+    json!({"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed","dns_mode":"hijack"})
+}
+pub fn connection_setup_review(before: &Store, next: &Store) -> Result<String> {
+    // This is a save preview, not a statement about an active core.
+    let _ = config::generate(next)?;
+    let old = migration(before)?;
+    let new = next.native.as_ref().context("Missing native draft")?;
+    let mut paths = vec![];
+    diff(&old, new, "", &mut paths);
+    let target = if next.settings.route_mode == "global" {
+        next.settings.global_target.as_str()
+    } else {
+        new.pointer("/route/final")
+            .and_then(Value::as_str)
+            .unwrap_or("(core default)")
+    };
+    Ok(format!("Preview only — Save Draft does not start or restart the core.\n\nMode: {} → {}\n{}: {}\nCapture: {}{}\nDNS and existing routing rules unchanged.\n{}\nChanged native fields:\n{}\n\nNext: review Start / Apply separately.{}",
+        before.settings.route_mode,next.settings.route_mode,
+        if next.settings.route_mode=="global"{"Global target"}else if next.settings.route_mode=="direct"{"Saved rule target (unused in Direct)"}else{"Unmatched traffic target"},crate::model::clean(target),
+        if uses_tun(next){"TUN"}else{"Proxy Ports"},if next.settings.mode=="system"{" + System Proxy"}else{""},
+        if before.native.is_none(){"Initializes native configuration with a private backup on save."}else{""},
+        if paths.is_empty(){"  No native field changes".into()}else{paths.iter().map(|p|format!("  {p}")).collect::<Vec<_>>().join("\n")},
+        if uses_tun(next){" TUN needs authorization and can interrupt SSH."}else{""}))
+}
+pub fn connection_setup(
+    store: &Store,
+    change: &ConnectionSetup,
+    ssh: bool,
+    system_supported: bool,
+) -> Result<Store> {
+    ensure!(
+        change.revision == revision(store),
+        "Draft changed; reopen connection setup"
+    );
+    ensure!(
+        ["rule", "global", "direct"].contains(&change.mode.as_str()),
+        "Invalid routing mode"
+    );
+    ensure!(
+        ["keep", "port", "system", "tun"].contains(&change.capture.as_str()),
+        "Invalid capture option"
+    );
+    let mut next = store.clone();
+    if next.native.is_none() {
+        let d = migration(&next)?;
+        adopt(&mut next, d)?;
+    }
+    let tun = uses_tun(&next);
+    let doc = next.native.as_mut().unwrap();
+    if let Some(target) = &change.target {
+        ensure!(
+            ["/outbounds", "/endpoints"]
+                .iter()
+                .any(|p| array(doc, p).iter().any(|v| tag(v) == target)),
+            "Selected target no longer exists"
+        );
+        ensure!(
+            change.mode != "direct",
+            "Direct mode does not use a proxy target; choose Keep current"
+        );
+        if change.mode == "global" {
+            next.settings.global_target = target.clone();
+        } else {
+            set(doc, "/route/final", json!(target))?;
+        }
+    }
+    next.settings.route_mode = change.mode.clone();
+    match change.capture.as_str() {
+        "system" => {
+            ensure!(
+                system_supported && !ssh,
+                "System Proxy is available only on local macOS; SSH controls the remote host"
+            );
+            ensure!(!tun,"Existing TUN is preserved; edit it under Network / Inbounds before selecting System Proxy");
+            next.settings.mode = "system".into();
+        }
+        "port" => {
+            ensure!(!tun,"Existing TUN is preserved; edit it under Network / Inbounds before selecting Proxy Ports only");
+            next.settings.mode = "port".into();
+        }
+        "tun" => {
+            if !tun {
+                ensure!(
+                    !array(doc, "/inbounds").iter().any(|v| tag(v) == "tun-in"),
+                    "TUN tag already exists; configure it under Network / Inbounds"
+                );
+                doc.as_object_mut()
+                    .unwrap()
+                    .entry("inbounds")
+                    .or_insert(json!([]))
+                    .as_array_mut()
+                    .context("Inbounds must be a list")?
+                    .push(tun_template());
+            }
+            next.settings.mode = "port".into();
+        }
+        _ => {}
+    }
+    shape(doc)?;
+    Ok(next)
+}
+
+/// Validate the affected group's reachable outbound graph, allowing unrelated
+/// unfinished draft objects to remain editable. Apply validates the whole doc.
+pub fn validate_group(doc: &Value, group: &Value) -> Result<()> {
+    let own = tag(group);
+    ensure!(!own.is_empty(), "Group tag is required");
+    ensure!(
+        ["selector", "urltest"].contains(&group["type"].as_str().unwrap_or("")),
+        "Choose Manual or Automatic"
+    );
+    let members = group["outbounds"]
+        .as_array()
+        .context("Choose group members")?;
+    ensure!(!members.is_empty(), "Select at least one member");
+    let mut unique = HashSet::new();
+    for member in members {
+        ensure!(
+            unique.insert(member.as_str().context("Member must be an outbound tag")?),
+            "Duplicate group member"
+        );
+    }
+    if let Some(default) = group["default"].as_str().filter(|s| !s.is_empty()) {
+        ensure!(
+            members.iter().any(|m| m == default),
+            "Default member must be selected"
+        );
+    }
+    let mut objects = HashMap::new();
+    for p in ["/outbounds", "/endpoints"] {
+        for v in array(doc, p) {
+            ensure!(
+                objects.insert(tag(v), v).is_none(),
+                "Duplicate outbound tag: {}",
+                tag(v)
+            );
+        }
+    }
+    objects.insert(own, group);
+    fn visit<'a>(
+        t: &'a str,
+        objects: &HashMap<&'a str, &'a Value>,
+        active: &mut HashSet<&'a str>,
+        done: &mut HashSet<&'a str>,
+    ) -> Result<()> {
+        if done.contains(t) {
+            return Ok(());
+        }
+        ensure!(active.insert(t), "Circular group / outbound reference: {t}");
+        let v = objects
+            .get(t)
+            .with_context(|| format!("Member no longer exists: {t}"))?;
+        if ["selector", "urltest"].contains(&v["type"].as_str().unwrap_or("")) {
+            ensure!(
+                !array(v, "/outbounds").is_empty(),
+                "Referenced group has no members: {t}"
+            );
+            if let Some(default) = v["default"].as_str().filter(|s| !s.is_empty()) {
+                ensure!(
+                    array(v, "/outbounds").iter().any(|m| m == default),
+                    "Invalid default in referenced group: {t}"
+                );
+            }
+        }
+        for member in array(v, "/outbounds") {
+            visit(
+                member.as_str().context("Member must be an outbound tag")?,
+                objects,
+                active,
+                done,
+            )?;
+        }
+        if let Some(detour) = v["detour"].as_str().filter(|s| !s.is_empty()) {
+            visit(detour, objects, active, done)?;
+        }
+        active.remove(t);
+        done.insert(t);
+        Ok(())
+    }
+    visit(own, &objects, &mut HashSet::new(), &mut HashSet::new())
+}
+
+pub fn write_group(store: &mut Store, change: GroupChange) -> Result<()> {
+    ensure!(
+        change.revision == revision(store),
+        "Draft changed. Reopen the group before saving."
+    );
+    let name = crate::model::clean(change.name.trim());
+    ensure!(!name.is_empty(), "Group name is required");
+    let group_tag = tag(&change.value).to_string();
+    let mut next = store.clone();
+    let doc = next
+        .native
+        .as_mut()
+        .context("Initialize native configuration first")?;
+    validate_group(doc, &change.value)?;
+    ensure!(
+        !array(doc, "/endpoints").iter().any(|v| tag(v) == group_tag),
+        "Group tag is already used by an endpoint"
+    );
+    let list = doc["outbounds"]
+        .as_array_mut()
+        .context("Outbounds must be a list")?;
+    if let Some(original) = &change.original_tag {
+        ensure!(
+            original == &group_tag,
+            "Group editor preserves its native tag; use explicit native editing to rename it"
+        );
+        let item = list
+            .iter_mut()
+            .find(|v| tag(v) == original)
+            .context("Group no longer exists")?;
+        ensure!(
+            ["selector", "urltest"].contains(&item["type"].as_str().unwrap_or("")),
+            "Selected outbound is not a group"
+        );
+        *item = change.value;
+    } else {
+        ensure!(
+            !list.iter().any(|v| tag(v) == group_tag),
+            "Group tag already exists"
+        );
+        list.push(change.value);
+    }
+    shape(doc)?;
+    next.display_names.insert(group_tag, name);
+    *store = next;
+    Ok(())
+}
+
+/// Import a converted resource and its route together. All mutations are staged
+/// in a clone so failed target/position/conflict checks leave the caller intact.
+pub fn bind_rule_resource(
+    store: &mut Store,
+    resource: &crate::model::RuleResource,
+    target: &str,
+    position: usize,
+) -> Result<()> {
+    let mut next = store.clone();
+    let doc = next
+        .native
+        .as_mut()
+        .context("Initialize native configuration first")?;
+    ensure!(
+        !resource.native_rules().is_empty(),
+        "Rule set contains no supported rules"
+    );
+    ensure!(
+        target == "reject"
+            || ["/outbounds", "/endpoints"]
+                .iter()
+                .any(|p| array(doc, p).iter().any(|v| tag(v) == target)),
+        "Choose an existing target"
+    );
+    let count = array(doc, "/route/rules").len();
+    ensure!(
+        position <= count,
+        "Insertion position changed. Review the rule order again."
+    );
+    let native_rules = json!(resource.native_rules());
+    let mut sets = array(doc, "/route/rule_set").to_vec();
+    if let Some(existing) = sets.iter_mut().find(|v| tag(v) == resource.tag()) {
+        let original = store
+            .rule_resources
+            .iter()
+            .find(|r| r.id == resource.id)
+            .context("Rule-set tag is already used by a native object")?;
+        ensure!(
+            existing["type"] == "inline" && existing["rules"] == json!(original.native_rules()),
+            "Rule set has local edits; review or detach it before importing again"
+        );
+        existing["rules"] = native_rules;
+    } else {
+        sets.push(json!({"type":"inline","tag":resource.tag(),"rules":native_rules}));
+    }
+    set(doc, "/route/rule_set", json!(sets))?;
+    let rule = if target == "reject" {
+        json!({"rule_set":[resource.tag()],"action":"reject"})
+    } else {
+        json!({"rule_set":[resource.tag()],"action":"route","outbound":target})
+    };
+    let mut rules = array(doc, "/route/rules").to_vec();
+    rules.insert(position, rule);
+    set(doc, "/route/rules", json!(rules))?;
+    shape(doc)?;
+    if let Some(old) = next.rule_resources.iter_mut().find(|r| r.id == resource.id) {
+        *old = resource.clone();
+    } else {
+        next.rule_resources.push(resource.clone());
+    }
+    if !next.rule_bindings.iter().any(|b| b.resource == resource.id) {
+        next.rule_bindings.push(crate::model::RuleBinding {
+            id: crate::model::id(&format!("binding:{}", resource.id)),
+            resource: resource.id.clone(),
+            target: target.into(),
+            enabled: true,
+        });
+    }
+    *store = next;
+    Ok(())
 }
 
 pub fn revision(store: &Store) -> String {
@@ -87,6 +407,7 @@ pub fn write(store: &mut Store, edit: Edit) -> Result<()> {
         .context("Native configuration is not initialized")?;
     set(&mut doc, &edit.pointer, edit.value)?;
     shape(&doc)?;
+    links::check_removals(store.native.as_ref().unwrap(), &doc)?;
     let present: HashSet<_> = array(&doc, "/route/rule_set")
         .iter()
         .map(|v| tag(v).to_string())
@@ -359,6 +680,16 @@ pub fn reconcile(old: &Store, new: &mut Store) -> Result<()> {
         .map(|n| (&n.id, &n.outbound))
         .ne(new.nodes.iter().map(|n| (&n.id, &n.outbound)));
     if nodes_changed {
+        let removed: Vec<_> = old
+            .nodes
+            .iter()
+            .filter(|n| !new.nodes.iter().any(|v| v.id == n.id))
+            .map(|n| n.tag())
+            .collect();
+        for tag in &removed {
+            let uses = reference_paths(doc, tag);
+            ensure!(uses.is_empty(), "Removed subscription node {tag} is still referenced at {}. Edit those references or detach the node before updating.",uses.join(", "));
+        }
         let list = doc["outbounds"]
             .as_array_mut()
             .context("outbounds must be an array")?;
@@ -412,7 +743,9 @@ pub fn reconcile(old: &Store, new: &mut Store) -> Result<()> {
     }
     for resource in &new.rule_resources {
         let before = old.rule_resources.iter().find(|r| r.id == resource.id);
-        if before.is_some_and(|r| r.rules == resource.rules) {
+        if before.is_some_and(|r| {
+            r.rules == resource.rules && r.native_document == resource.native_document
+        }) {
             continue;
         }
         let sets = doc["route"]
@@ -422,11 +755,11 @@ pub fn reconcile(old: &Store, new: &mut Store) -> Result<()> {
             .or_insert(json!([]))
             .as_array_mut()
             .context("rule_set must be an array")?;
-        let value = json!({"type":"inline","tag":resource.tag(),"rules":ruleset::native_rules(&resource.rules)});
+        let value = json!({"type":"inline","tag":resource.tag(),"rules":resource.native_rules()});
         if let Some(i) = sets.iter().position(|s| tag(s) == resource.tag()) {
             if let Some(before) = before {
                 ensure!(
-                    sets[i]["rules"] == json!(ruleset::native_rules(&before.rules)),
+                    sets[i]["rules"] == json!(before.native_rules()),
                     "Rule-set has local edits; detach before refresh"
                 );
             }
@@ -457,6 +790,14 @@ pub fn reconcile(old: &Store, new: &mut Store) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn reference_paths(doc: &Value, tag: &str) -> Vec<String> {
+    links::links(doc)
+        .into_iter()
+        .filter(|l| l.kind == links::ObjectKind::Outbound && l.tag == tag)
+        .map(|l| l.path)
+        .collect()
 }
 
 pub fn review(saved: &Store, running: Option<&Store>) -> Result<String> {
@@ -501,7 +842,8 @@ pub fn review(saved: &Store, running: Option<&Store>) -> Result<String> {
         .unwrap_or(json!({}));
     let mut paths = vec![];
     diff(&before, &proposed, "", &mut paths);
-    result.push_str("Changed fields (values hidden):\n");
+    result.push_str(&review::summary(saved, &before, &proposed));
+    result.push_str("\n\nChanged sections (open Native Diff for values):\n");
     for p in paths.iter().take(150) {
         result.push_str(&format!("  {p}\n"));
     }
@@ -548,6 +890,145 @@ mod tests {
         let d = migration(&s).unwrap();
         adopt(&mut s, d).unwrap();
         s
+    }
+    fn group_change(s: &Store) -> GroupChange {
+        GroupChange {
+            revision: revision(s),
+            original_tag: None,
+            name: "Media".into(),
+            value: json!({"type":"selector","tag":"media","outbounds":["proxy","direct"],"default":"proxy","future_option":{"keep":true}}),
+        }
+    }
+    #[test]
+    fn connection_setup_preserves_native_policy_and_custom_tun() {
+        let mut s = store();
+        let before = s.native.clone().unwrap();
+        let mut change = ConnectionSetup {
+            revision: revision(&s),
+            target: Some("direct".into()),
+            mode: "global".into(),
+            capture: "keep".into(),
+        };
+        let next = connection_setup(&s, &change, false, true).unwrap();
+        assert_eq!(next.native, s.native);
+        assert_eq!(next.settings.global_target, "direct");
+        change.capture = "system".into();
+        assert!(connection_setup(&s, &change, true, true).is_err());
+        assert!(connection_setup(&s, &change, false, false).is_err());
+        change.capture = "tun".into();
+        let next = connection_setup(&s, &change, false, true).unwrap();
+        assert_eq!(next.native.as_ref().unwrap()["dns"], before["dns"]);
+        assert_eq!(next.native.as_ref().unwrap()["route"], before["route"]);
+        s = next;
+        change.revision = revision(&s);
+        let keep = connection_setup(&s, &change, false, true).unwrap();
+        assert_eq!(keep.native, s.native);
+        change.capture = "port".into();
+        assert!(connection_setup(&s, &change, false, true).is_err());
+    }
+    #[test]
+    fn group_transaction_keeps_native_fields_and_stable_references() {
+        let mut s = store();
+        let before = s.native.clone().unwrap();
+        let c = group_change(&s);
+        write_group(&mut s, c.clone()).unwrap();
+        assert_eq!(s.display_names["media"], "Media");
+        assert_eq!(s.native.as_ref().unwrap()["dns"], before["dns"]);
+        assert_eq!(s.native.as_ref().unwrap()["route"], before["route"]);
+        let mut rename = c.clone();
+        rename.revision = revision(&s);
+        rename.original_tag = Some("media".into());
+        rename.name = "Video".into();
+        write_group(&mut s, rename).unwrap();
+        assert_eq!(s.display_names["media"], "Video");
+        assert_eq!(
+            array(s.native.as_ref().unwrap(), "/outbounds")
+                .last()
+                .unwrap(),
+            &c.value
+        );
+        let snapshot = serde_json::to_value(&s).unwrap();
+        assert!(write_group(&mut s, c)
+            .unwrap_err()
+            .to_string()
+            .contains("Draft changed"));
+        assert_eq!(serde_json::to_value(&s).unwrap(), snapshot);
+        let dir = tempfile::tempdir().unwrap();
+        s.save(dir.path()).unwrap();
+        assert_eq!(
+            Store::load(dir.path()).unwrap().display_names,
+            s.display_names
+        );
+    }
+    #[test]
+    fn invalid_group_changes_leave_entire_store_untouched() {
+        let mut s = store();
+        for value in [
+            json!({"type":"selector","tag":"media","outbounds":[]}),
+            json!({"type":"selector","tag":"media","outbounds":["absent"]}),
+            json!({"type":"selector","tag":"media","outbounds":["direct"],"default":"proxy"}),
+            json!({"type":"selector","tag":"media","outbounds":["media"]}),
+            json!({"type":"selector","tag":"media","outbounds":["direct","direct"]}),
+            json!({"type":"selector","tag":"direct","outbounds":["proxy"]}),
+        ] {
+            let before = serde_json::to_value(&s).unwrap();
+            let mut c = group_change(&s);
+            c.value = value;
+            assert!(write_group(&mut s, c).is_err());
+            assert_eq!(serde_json::to_value(&s).unwrap(), before);
+        }
+        s.native.as_mut().unwrap()["endpoints"] = json!([{"type":"wireguard","tag":"media"}]);
+        let c = group_change(&s);
+        assert!(write_group(&mut s, c)
+            .unwrap_err()
+            .to_string()
+            .contains("endpoint"));
+        s.native.as_mut().unwrap()["endpoints"] = json!([]);
+        s.native.as_mut().unwrap()["outbounds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"selector","tag":"nested","outbounds":["media"]}));
+        let mut c = group_change(&s);
+        c.value["outbounds"] = json!(["nested"]);
+        c.value["default"] = json!("nested");
+        assert!(write_group(&mut s, c)
+            .unwrap_err()
+            .to_string()
+            .contains("Circular"));
+    }
+    #[test]
+    fn referenced_object_removal_is_atomic_and_dns_names_do_not_block_outbounds() {
+        let mut s = store();
+        s.native = Some(
+            json!({"outbounds":[{"type":"direct","tag":"same"}],"dns":{"servers":[{"type":"local","tag":"same"}],"final":"same","rules":[{"rule_set":["video"],"server":"same"}]},"route":{"rule_set":[{"type":"inline","tag":"video","rules":[{"domain_suffix":["example.test"]}]}]}}),
+        );
+        let before = serde_json::to_value(&s).unwrap();
+        let edit = Edit {
+            revision: revision(&s),
+            pointer: "/route/rule_set".into(),
+            value: json!([]),
+        };
+        assert!(write(&mut s, edit)
+            .unwrap_err()
+            .to_string()
+            .contains("/dns/rules/0/rule_set"));
+        assert_eq!(serde_json::to_value(&s).unwrap(), before);
+        let edit = Edit {
+            revision: revision(&s),
+            pointer: "/outbounds".into(),
+            value: json!([]),
+        };
+        write(&mut s, edit).unwrap();
+        assert_eq!(s.native.as_ref().unwrap()["dns"]["final"], "same");
+        let mut doc = s.native.clone().unwrap();
+        doc["route"]["rule_set"] = json!([]);
+        doc["dns"]["rules"] = json!([]);
+        let edit = Edit {
+            revision: revision(&s),
+            pointer: String::new(),
+            value: doc,
+        };
+        write(&mut s, edit).unwrap();
     }
     #[test]
     fn roundtrip_and_scoped_edits_preserve_unknown_fields() {
@@ -618,6 +1099,7 @@ mod tests {
             name: "Video".into(),
             source: "private".into(),
             format: "qx".into(),
+            native_document: None,
             updated_at: 0,
             digest: "x".into(),
             input_count: 1,

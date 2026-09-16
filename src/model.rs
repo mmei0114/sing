@@ -27,6 +27,15 @@ pub fn clean(text: &str) -> String {
         .take(512)
         .collect()
 }
+pub fn clean_multiline(text: &str) -> String {
+    text.chars()
+        .filter(|c| {
+            (!c.is_control() || *c == '\n')
+                && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(32768)
+        .collect()
+}
 pub fn default_dir() -> PathBuf {
     let base = if let Some(base) = std::env::var_os("XDG_DATA_HOME") {
         PathBuf::from(base)
@@ -153,9 +162,19 @@ pub struct RuleResource {
     pub digest: String,
     pub input_count: usize,
     pub rules: Vec<MatchRule>,
+    /// Original native JSON rule-set; never flatten compound predicates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_document: Option<Value>,
     pub warnings: Vec<String>,
 }
 impl RuleResource {
+    pub fn native_rules(&self) -> Vec<Value> {
+        self.native_document
+            .as_ref()
+            .and_then(|d| d["rules"].as_array())
+            .cloned()
+            .unwrap_or_else(|| crate::ruleset::native_rules(&self.rules))
+    }
     pub fn tag(&self) -> String {
         format!("rs-{}", self.id)
     }
@@ -218,6 +237,9 @@ pub struct Store {
     pub schema: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<Value>,
+    /// Client labels; never serialized into the sing-box native document.
+    #[serde(default)]
+    pub display_names: std::collections::BTreeMap<String, String>,
     pub secret: String,
     pub subscriptions: Vec<Subscription>,
     pub nodes: Vec<Node>,
@@ -237,6 +259,7 @@ impl Store {
         Ok(Self {
             schema: 1,
             native: None,
+            display_names: Default::default(),
             secret: token()?,
             subscriptions: vec![],
             nodes: vec![],
