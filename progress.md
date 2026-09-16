@@ -2,6 +2,9 @@
 
 ## 2026-09-16 — GitHub 首次公开发布准备
 
+- 源码与文档已推送 main（680982e），GitHub 公开页、MIT 识别、14 个 topics 和私密漏洞报告 enabled 已读取确认。首个远端 CI（35046449449）macOS 通过；Linux 普通测试通过，但 Clippy 揭示 macOS 专用事务/Watchdog 在 Linux 生产构建中未使用。
+- 发布前修复将事务实现拆入 cfg(macos 或 test) 的 controller 模块，保留所有平台的模拟事务测试；增加 port 生命周期断言，Watchdog 同样按平台/测试编译，不关闭 -D warnings。同时 checkout 升级固定 v6 SHA，消除 Node 20 退役提醒。第二轮远端结果待核对。
+
 - 用户明确授权公开到 GitHub，并确认仓库 sing、MIT。只读核对实际账号 mmei0114 和现有仓库，创建新公开仓库 https://github.com/mmei0114/sing ，没有改动既有项目。
 - 英文 README 重写为定位、真实预览、功能、快速开始、导航、边界与贡献入口；增加 README.zh-CN.md，原详细说明迁至 docs/usage.md。按照文档技能做独立无上下文读者审查，补全实际代理端口、Apply/Start、恢复命令、私有数据目录和手动核心获取说明。
 - 新增 MIT 全文、CHANGELOG、CONTRIBUTING、SECURITY、隐私提醒问题模板、PR 模板、最小权限/固定 action SHA 的 macOS/Linux CI、源码预览版 release notes。没有新增客户端运行功能或切换用户网络；没有公开第三方 core 二进制。

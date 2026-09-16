@@ -39,6 +39,8 @@ pub fn query(dir: &Path, request: Request) -> Result<ProxyStatus> {
     Ok(response.status)
 }
 pub fn status(dir: &Path, port: u16) -> ProxyStatus {
+    #[cfg(not(target_os = "macos"))]
+    let _ = port; // Other platforms have no OS system-proxy inventory backend.
     if let Ok(s) = query(dir, Request::Status) {
         return s;
     }
@@ -141,10 +143,12 @@ fn privileged_socket(dir: &Path, uid: u32) -> Result<std::path::PathBuf> {
     Ok(Path::new("/private/var/run/sing-proxy").join(format!("{uid}-{}.sock", &digest[..20])))
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct Watchdog {
     dead_checks: u8,
 }
+#[cfg(any(target_os = "macos", test))]
 impl Watchdog {
     fn should_restore(&mut self, heartbeat_age: Duration, port_alive: bool) -> bool {
         self.dead_checks = if port_alive {
