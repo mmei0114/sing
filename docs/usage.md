@@ -4,19 +4,19 @@
 
 An English terminal client for sing-box, locally tested on macOS arm64 with Linux as a target platform. Runtime control uses the official sing-box 1.14+ gRPC service, not a Clash compatibility layer. Subscription and QX/Clash rule conversion happen locally.
 
-## 0.6.0 — product workspaces
+## 0.6.1-dev — quiet shell and evidence-based routing
 
-Five workspaces, visible keyboard actions, and one authoritative native configuration:
+Three primary workspaces and one authoritative native configuration:
 
 | Workspace | Pages |
 |---|---|
 | Overview | Status, connection setup, common groups |
-| Proxies | Proxy Groups, Nodes, Subscriptions |
-| Routing | Rules, Rule Sets |
-| Network | Capture, Inbounds, DNS → Servers / Rules / Options |
-| Activity | Connections, Logs, Diagnostics |
+| Policies | Proxy Groups, ordered Rules, node/rule Sources |
+| Activity | Connections, observed Apps and links, Logs |
 
-Settings is a global button: Core, Interface, Client, Advanced Tools. Advanced Tools keeps access to endpoints, services, experimental options and the complete native document; it does not duplicate DNS or TUN editors.
+The fixed bottom controls are Start/Stop, Rule/Global/Direct Mode and TUN. Config is a global utility and follows sing-box's document order: Core, `log`, `dns`, `ntp`, `certificate`, `endpoints`, `inbounds`, `outbounds`, `route`, `services`, `experimental`, and full JSON. DNS Servers / Rules / Options use the same list-and-object editor language as every other native object.
+
+Activity keeps session history from the core's connection API. Connections and observed apps can be sorted by recency or traffic. `r` creates a prefilled native rule from the selected evidence: exact domain, domain suffix, escaped regex, process name, exact process path, or process + domain. The shared editor is always the final review, and the new rule is inserted before the first terminal routing rule. This is not a system-wide process inventory: applications with no captured and identified connection do not appear.
 
 This release implements the main product workflows. The built executable has been tested on macOS arm64 with sing-box 1.14.0. **Real System Proxy/TUN, Linux/SSH host recovery and first-time user acceptance remain unverified.** See [acceptance and limitations](acceptance-0.6.0.md). This is not a claim of comprehensive platform validation or improved video throughput.
 
@@ -51,13 +51,13 @@ Use 80 × 24 or larger; 54 × 18 is supported with scrolling. Wide terminals sho
 
 Default private data lives in `~/Library/Application Support/sing` on macOS and `~/.local/share/sing` on Linux. If `XDG_DATA_HOME` is set, its `sing` subdirectory is used instead. An existing legacy `sbtui` directory is reused when the corresponding `sing` directory does not exist. `--data-dir` overrides this location. These directories contain secrets; keep backups private and stop the manager before restoring compatible state.
 
-For macOS system-proxy restoration, use **Network → Capture → Restore System Proxy** (or `R`). It restores sing-owned settings without stopping the core. If the interface/manager cannot be used, `./sing --restore-system-proxy` is the dedicated recovery command; it may request administrator authorization. Use the same `--data-dir` as the affected instance. Inspect reported errors rather than deleting recovery records or force-killing processes. The system-proxy recovery command does not repair arbitrary TUN routes; keep local/console access when testing TUN. Actual host-level recovery remains a known validation gap.
+For normal macOS system-proxy control, use `p` on Overview. If the interface/manager cannot be used, `./sing --restore-system-proxy` is the dedicated recovery command; it may request administrator authorization. Use the same `--data-dir` as the affected instance. Inspect reported errors rather than deleting recovery records or force-killing processes. The system-proxy recovery command does not repair arbitrary TUN routes; keep local/console access when testing TUN. Actual host-level recovery remains a known validation gap.
 
 ## Three common tasks
 
 ### Import a subscription and connect
 
-Choose **Import Subscription** on Overview or Proxies. Paste a subscription URL, supported node links, common Clash node YAML, sing-box node JSON, or a local path. This imports nodes, **not** another client's whole DNS/routing configuration.
+Press `i` on Overview or Policies. Paste a subscription URL, supported node links, common Clash node YAML, sing-box node JSON, or a local path. This imports nodes, **not** another client's whole DNS/routing configuration.
 
 Name is optional. Expand **Advanced** only if your provider requires a User-Agent.
 
@@ -65,7 +65,7 @@ Review → **Save & Set Up** → choose target, mode and capture → **Review Se
 
 Capture choices:
 
-- **Proxy Ports**: configure individual applications to use the local HTTP/SOCKS listener. Inspect the actual address/port in Network → Inbounds; the generated mixed listener defaults to `127.0.0.1:2080`. Use the loaded configuration, not an unapplied draft value. Merely starting a core does not proxy every application.
+- **Proxy Ports**: configure individual applications to use the local HTTP/SOCKS listener. Inspect the actual address/port in Config → `inbounds`; the generated mixed listener defaults to `127.0.0.1:2080`. Use the loaded configuration, not an unapplied draft value. Merely starting a core does not proxy every application.
 - **System Proxy**: local macOS only; supported applications use OS proxy settings. Requires explicit authorization and a matching loopback listener.
 - **TUN**: an actual native inbound, requiring administrator authorization. It can affect routes and interface DNS, and interrupt SSH. Existing TUN objects remain editable in Inbounds.
 - **Keep current capture** preserves complex configurations. Switching to Ports/System does not silently delete existing TUN listeners.
@@ -76,7 +76,7 @@ Subscriptions has **Update**, **Update All**, preview/cancel and **Refresh Previ
 
 ### Create a proxy group
 
-Proxies → **New Group**. Set a display name, choose Manual (selector) or Automatic (urltest), search by name/source, select members, choose the manual default, then save once.
+Policies → **Groups** → `n`. Set a display name, choose Manual (selector) or Automatic (urltest), choose members and the manual default, then save once.
 
 Group/endpoint members and unknown native fields are preserved. Empty groups, invalid defaults and cycles are rejected. Display names do not rename stable native tags. Automatic groups expose their test URL, interval and tolerance; lowest latency does not guarantee best throughput or streaming access.
 
@@ -88,7 +88,7 @@ When stopped, use **Edit** to change the default member, or start the core befor
 
 ### Import and route a rule set
 
-Routing → **Import Rule Set** → source/format → target and insertion position → **Save Rule to Draft** → Review/Apply. **New Group** inside this flow is staged with the resource and route: cancel leaves no orphan group.
+Policies → `R` **Import Rule Set** → source preview → target → **Save to Draft** → Review/Apply. Imported rules are inserted after nonterminal preparation actions and before the first terminal routing action.
 
 Formats:
 
@@ -101,16 +101,16 @@ Import does not change DNS. One native rule set can be used by both Route and DN
 
 ## Navigation and editing
 
-- `1`–`5`: the five workspaces. `,`: Settings.
-- `Tab` / `Shift+Tab`: switch between content and page actions. `F6` focuses the bottom controls; `Esc` or `F6` returns. Arrows choose; Enter activates. Text fields take precedence over global shortcuts.
-- `[` / `]`: previous/next subpage. In DNS content, Left/Right switches Servers / Rules / Options. Each page/tab remembers its filter and selected row; deleted rows are clamped on return.
-- `I`: import a subscription from any page. `g` in Proxies: new group. `C` in Routing: import a rule set. These actions also have visible entries.
-- `/`: filter the current list. `:` or **Actions / More**: searchable actions.
-- `a` Add, `e` Edit, `E` Native JSON, `x` Remove; `J/K` reorder rules.
-- `F2` / `Ctrl+S` or the visible Save button: save a draft. Save is not Apply.
+- `1`–`3`: Overview / Policies / Activity. `,`: Config.
+- `s`: Start/Stop. `m`: Rule / Global / Direct. `t`: TUN. `p` on Overview: local macOS System Proxy. `A`: Review & Apply.
+- Arrows or `j/k` choose; Enter activates. Text fields take precedence over global shortcuts.
+- `[` / `]`: previous/next section. Each workspace keeps its selected row.
+- `i`: import a subscription. `n` in Groups/Rules: new item. `R`: import a rule set. `e`: edit. `x`: remove. `J/K`: reorder rules.
+- `o` in Activity toggles recent/traffic ordering. `r` creates a rule from the selected connection or app. Enter on an app shows its links.
+- `F2` / `Ctrl+S` in the shared editor saves a draft. Save is not Apply; `a` reveals all documented fields and `e` opens object JSON.
 - **References** shows Uses / Used by; **Back to References** restores the original list/filter/selection. Removal/rename cannot leave recognized native references dangling. Atomic edits to the full native document can update definitions and references together.
-- `A` / bottom **Review**: opens **Review Changes**, with a readable summary, expandable redacted Native Diff and explicit Apply. Application validates first, then restarts the core and can interrupt connections.
-- `M`: Rule / Global / Direct. Global/Direct override traffic routing without deleting saved rules. DNS and internal dial paths are not implicitly rewritten; Direct is not an unconditional no-proxy guarantee for internal DNS.
+- `A`: opens **Review & Apply**, with a readable summary and explicit confirmation. Application validates first, then restarts the core and can interrupt connections.
+- `m`: Rule / Global / Direct. Global/Direct override traffic routing without deleting saved rules. DNS and internal dial paths are not implicitly rewritten; Direct is not an unconditional no-proxy guarantee for internal DNS.
 - `t`: URL latency test, not a bandwidth test. `V`: core configuration check. `v` on Overview: explicit HTTPS connectivity probe.
 - `q`: close only the interface; a running manager/core stays active. Stop / `d` restores managed proxy settings before stopping.
 

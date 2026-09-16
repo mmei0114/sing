@@ -222,3 +222,9 @@ https://github.com/mmei0114/fly-auto-singbox
 - GitHub release API 会限流；自动安装使用官方 release assets 页面核实的固定 SHA-256，不使用第三方镜像或转换服务。
 - 当前机器 Homebrew 安装的是 1.13.2，需独立 1.14+ 核心；测试下载不会覆盖系统安装。
 - 普通沙箱禁止 loopback 监听；相关测试经权限审核后只在本机回环地址运行，测试结束清理。
+# 2026-09-17 — Surge-style 收敛实施发现
+
+- 当前分支 `surge-style-redesign` 在 WIP 提交 `08a9877` 上；`src/tui/editor.rs` 与 `schema.rs` 有 1827 行未提交增量，已视为用户在途改动保留。
+- 新外壳已有 Overview、顶部三页导航、底部控制和离线 Demo，但 `proxies.rs` / `activity.rs` / `config.rs` / `quick_rule.rs` 以及 `flows.rs` 的主流程仍是空实现；这是当前产品无法使用的核心缺口。
+- 首次 `cargo test --all-targets --no-run` 发现两处测试 `Manager` 初始化缺少 `started_at`；主要其余警告由未接入的编辑器和空页导致。
+- sing-box 官方 1.14 文档确认：`process_name` / `process_path` 在 Linux、Windows、macOS 可用，`process_path_regex` 自 1.10 可用；`route.find_process` 是在没有进程匹配规则时为日志启用进程查找。因此可以实现“已观测 App → 链接 → 路由”，但不应宣称等同 Little Snitch 的全系统进程识别。

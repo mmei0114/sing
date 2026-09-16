@@ -228,3 +228,13 @@
 - 最终普通测试 26 项通过；3 项需网络 / loopback 的测试分别显式运行通过，不混入普通测试。Clippy all-targets -D warnings 通过。
 - PTY 验证了中文切换与 q 正常恢复终端。隔离的 ui-smoke 后台管理器已通过 --shutdown 停止；保留虚构测试文件以便复查。
 - 已完成第一版可运行交付；README 如实记录范围和未验收的平台 / 特权行为。
+# 2026-09-17 — Surge-style 收敛（进行中）
+
+- 已运行仓库要求的 Superpowers bootstrap 和 planning-with-files 读取，两个指定路径在本机均不存在；已向用户说明，继续使用仓库现有三文件记录。
+- 已核对 Git 分支、WIP 提交、未提交编辑器/模式表和新 TUI 实现状态；未动用户真实网络或运行中核心。
+- 已用官方 sing-box 文档确认进程匹配能力与平台边界，并将 Activity 范围收敛为“核心已观测的网络进程”。
+- 编译基线当前因两处测试初始化缺少 `started_at` 失败；尚未宣称任何实施阶段完成。
+- 已完成第一笔本地提交 `813569e`：顶部只保留 Overview / Policies / Activity；底栏核心控制只保留 Start / Mode / TUN，Config / Apply / Help 为右侧工具。
+- Policies 已贯通 Groups / Rules / Sources；Activity 已贯通 Connections / Apps / Logs、最近/流量排序、App→链接证据，以及连接→域名/后缀/正则/IP/进程名/进程路径/App+Domain→目标→共享编辑器的快速规则流程。建议规则插入第一条终结路由动作之前，不会静默落到永远匹配不到的尾部。
+- Config 已按 sing-box 顶层对象顺序接入 Core、log、DNS、NTP、certificate、endpoints、inbounds、outbounds、route、services、experimental 和完整 JSON；Core 支持盘点、选择与官方版本下载入口。
+- 常规回归 100 项通过、6 项需特殊条件的单元测试按设计 ignored；3 个集成测试文件共 6 项需真实内核/回环/权限的测试 ignored。Clippy `-D warnings`、fmt 与 `git diff --check` 通过。未启停真实核心，未改真实 System Proxy/TUN。

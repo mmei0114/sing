@@ -12,7 +12,7 @@ sing is an independent, keyboard-first **terminal UI for [sing-box](https://sing
 
 **Native sing-box semantics. A more approachable client.** No Clash compatibility API or third-party subscription-conversion service is required.
 
-![sing Overview rendered from the real 0.6.0 demo: five workspaces, connection controls, import actions and separate core, capture and Internet-check states](docs/assets/overview.svg)
+![sing Overview rendered from the real demo: three quiet workspaces, live traffic, proxy groups and fixed Start, Mode and TUN controls](docs/assets/overview.svg)
 
 *Actual `sing --preview` output, rendered as SVG. Fictional demo data; no live traffic.*
 
@@ -28,6 +28,7 @@ sing is an independent, keyboard-first **terminal UI for [sing-box](https://sing
 - **Keep DNS independent.** Manage DNS servers, DNS rules and options in one place. Importing a routing rule set does not rewrite your DNS settings.
 - **Review before applying.** Read an object-level summary or a redacted native diff. Saving a draft does not restart the core; Apply is explicit.
 - **See what is actually running.** API-confirmed group choices, observed connections, logs and diagnostics distinguish core readiness, traffic capture and Internet checks. Successful manual selections can survive Apply without overwriting group defaults.
+- **Correct a route from evidence.** Activity groups observed network connections by application and destination. Sort by recency or traffic, then turn a connection into an editable domain, regex, process, process-path or App + Domain rule.
 
 Runtime control uses the official sing-box 1.14+ gRPC service. Compatibility has been tested with **1.14.0**; future core releases are not automatically guaranteed compatible.
 
@@ -54,14 +55,14 @@ Prefer a command on your PATH? From the cloned repository, use `cargo install --
 
 ### Make your first connection
 
-1. Open **Settings → Core → Install Core**, or set the path to a compatible sing-box executable. The built-in installer downloads the pinned official core and checks its SHA-256. The core is not bundled with this repository.
-2. Choose **Import Subscription** on Overview. Paste your source, review the nodes, then choose **Save & Set Up**.
-3. Choose your target, routing mode and capture method. **Proxy Ports** needs application proxy settings; **System Proxy** is local macOS integration; **TUN** requires elevated permission and can interrupt networking.
-4. **Save Draft**, inspect **Review Changes**, then explicitly **Apply**. Apply starts a stopped core or restarts a running one; you do not need a second Start after a successful Apply.
+1. Press `,` and open **Core**, then download or select a compatible sing-box executable. The installer verifies the official release digest; the core is not bundled with this repository.
+2. On Overview, press `i`, paste a subscription source, review the detected nodes, and save it to the draft.
+3. Open **Policies → Groups** to choose a proxy. Use `m` for Rule / Global / Direct, `t` for TUN, or `p` on Overview for local macOS System Proxy.
+4. Press `A`, review the changes, then explicitly apply. Applying starts a stopped core or restarts a running one.
 
 Starting a core alone does **not** proxy every application. Over SSH, sing manages the **remote host**, not your local computer. Do not try TUN takeover over your only critical SSH connection.
 
-For Proxy Ports, find the loaded listener in **Network → Inbounds**. The generated mixed listener defaults to `127.0.0.1:2080` and accepts HTTP or SOCKS; use your actual configured address/port in the application's proxy settings. That port is a proxy endpoint, not a website. If core download is unavailable, obtain the matching architecture from [official sing-box releases](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0) and set its executable path in Settings.
+For Proxy Ports, find the loaded listener under `,` **Config → inbounds**. The generated mixed listener defaults to `127.0.0.1:2080` and accepts HTTP or SOCKS; use your actual configured address/port in the application's proxy settings. That port is a proxy endpoint, not a website. If core download is unavailable, obtain the matching architecture from [official sing-box releases](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0) and select its executable in Core.
 
 Use **Stop** to disconnect. `q` closes the interface but leaves a running core active. Upgrading an existing installation? Read the [safe upgrade steps](docs/usage.md#upgrade-safely) first.
 
@@ -70,14 +71,12 @@ Use **Stop** to disconnect. `q` closes the interface but leaves a running core a
 | Workspace | What belongs here |
 |---|---|
 | **Overview** | Connection status, setup and common groups |
-| **Proxies** | Proxy Groups · Nodes · Subscriptions |
-| **Routing** | Ordered Rules · Rule Sets |
-| **Network** | Capture · Inbounds · DNS Servers / Rules / Options |
-| **Activity** | Connections · Logs · Diagnostics |
+| **Policies** | Proxy Groups · ordered Rules · subscription and rule Sources |
+| **Activity** | Connections · observed Apps and links · Logs · quick routing fixes |
 
-Settings is global. Advanced native editors are available without duplicating DNS or TUN objects.
+Config is global and follows the native sing-box document: `log`, `dns`, `ntp`, `certificate`, `endpoints`, `inbounds`, `outbounds`, `route`, `services`, `experimental`, then full JSON. Core installation and selection live alongside that tree without duplicating native objects.
 
-`Tab` switches between content and page actions; `F6` focuses the bottom controls. Arrows select, `Enter` activates, and `Esc` goes back. `1`–`5` switch workspaces, `[` / `]` switch subpages, and `,` opens Settings. Keys are shown beside common actions; text input takes priority. Use an **80×24 or larger** terminal; no mouse or Nerd Font is required.
+Arrows select, `Enter` activates, and `Esc` goes back. `1`–`3` switch workspaces, `[` / `]` switch sections, and `,` opens Config. The stable bottom controls are `s` Start/Stop, `m` Mode and `t` TUN. Keys are shown beside page actions; text input takes priority. Use an **80×24 or larger** terminal; no mouse or Nerd Font is required.
 
 ## A few important distinctions
 

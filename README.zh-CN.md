@@ -12,7 +12,7 @@ sing 是一个使用 Rust / Ratatui 构建的 **sing-box TUI**：为日常代理
 
 不依赖 Clash 兼容 API，不使用第三方订阅转换服务。**遵循 sing-box 的逻辑，让它更容易使用。**
 
-![sing 0.6.0 实际 Demo 界面：五个工作区、导入订阅和连接设置，以及独立的内核、接管与访问状态](docs/assets/overview.svg)
+![sing 实际 Demo 界面：三个克制的工作区、实时流量、代理组，以及固定的 Start、Mode、TUN 控制](docs/assets/overview.svg)
 
 *图片来自程序实际 `sing --preview` 输出，使用虚构数据，不代表真实代理连接。*
 
@@ -28,6 +28,7 @@ sing 是一个使用 Rust / Ratatui 构建的 **sing-box TUI**：为日常代理
 - **独立配置 DNS**：DNS Servers / Rules / Options 各有明确职责；导入路由规则不会偷偷重写 DNS。
 - **保存与应用分开**：先保存草稿，再查看变化摘要或脱敏原生差异，最后明确 Apply。不会因为修改一个字段就自动重启内核。
 - **查看实际运行情况**：节点切换经过 API 回读确认；查看连接、日志和诊断，区分内核运行、系统接管与网站访问检测。
+- **从实际连接修正分流**：Activity 按应用和目标整理内核观测到的连接，可按时间或流量排序，并把选中连接转成可编辑的域名、正则、进程、进程路径或 App + Domain 规则。
 
 运行控制使用 sing-box 1.14+ 官方 gRPC 服务；当前验收内核为 **1.14.0**，不保证未来版本自动兼容。手动组的成功选择可以在 Apply 后恢复，同时不改写原生默认成员。
 
@@ -54,14 +55,14 @@ Demo 只使用内存中的虚构数据，不会启动代理或改变网络。按
 
 ### 第一次连接
 
-1. 打开 **Settings → Core → Install Core**，安装校验 SHA-256 的固定版本官方内核；也可以指定兼容内核路径。仓库不捆绑 sing-box 内核。
-2. 在 Overview 选择 **Import Subscription**，粘贴来源并预览，选择 **Save & Set Up**。
-3. 选择出口、Rule / Global / Direct 模式及接管方式。**Proxy Ports** 需要应用自行设置代理；**System Proxy** 是 macOS 本机集成；**TUN** 需要提权，并可能中断网络。
-4. **Save Draft → Review Changes → Apply**。Apply 会启动已停止的内核，或重启正在运行的内核；成功后不需要再按一次 Start。
+1. 按 `,` 打开 **Core**，下载或选择兼容的 sing-box 内核。内置下载会校验官方发布摘要；仓库不捆绑内核。
+2. 在 Overview 按 `i`，粘贴订阅来源，审阅识别结果并保存到草稿。
+3. 到 **Policies → Groups** 选择代理；`m` 切换 Rule / Global / Direct，`t` 控制 TUN，Overview 的 `p` 控制 macOS 本机 System Proxy。
+4. 按 `A` 审阅并明确 Apply。Apply 会启动已停止的内核，或重启正在运行的内核。
 
 **启动内核不代表所有软件自动走代理。** SSH 中运行 sing 操作的是远程主机，不是你面前的电脑；不要在唯一的关键 SSH 通道中随意测试 TUN。
 
-使用 Proxy Ports 时，到 **Network → Inbounds** 查看实际监听地址和端口。程序生成的 mixed 入站默认 `127.0.0.1:2080`，同时支持 HTTP/SOCKS；在应用代理设置里填写你自己的实际值，该地址不是网页。如果自动下载内核不可用，可从[官方发行页](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0)取得匹配架构的可执行文件，再到 Settings 指定路径。
+使用 Proxy Ports 时，到 `,` **Config → inbounds** 查看实际监听地址和端口。程序生成的 mixed 入站默认 `127.0.0.1:2080`，同时支持 HTTP/SOCKS；在应用代理设置里填写你自己的实际值，该地址不是网页。如果自动下载内核不可用，可从[官方发行页](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0)取得匹配架构的可执行文件，再到 Core 选择。
 
 断开代理用 **Stop**；`q` 仅关闭界面，后台内核会继续运行。已有版本升级请先看[安全升级步骤](docs/usage.md#upgrade-safely)，不要盲目覆盖活动数据目录。
 
@@ -70,14 +71,12 @@ Demo 只使用内存中的虚构数据，不会启动代理或改变网络。按
 | 工作区 | 内容 |
 |---|---|
 | Overview | 运行状态、连接引导、常用代理组 |
-| Proxies | Proxy Groups / Nodes / Subscriptions |
-| Routing | 有序 Rules / Rule Sets |
-| Network | Capture / Inbounds / DNS Servers、Rules、Options |
-| Activity | Connections / Logs / Diagnostics |
+| Policies | Proxy Groups / 有序 Rules / 订阅与规则 Sources |
+| Activity | Connections / 已观测 Apps 与链接 / Logs / 快速分流修正 |
 
-Settings 是全局入口。TUI 界面目前仅英文，中文文档不代表存在中文界面。
+Config 是全局入口，按 sing-box 原生顶层配置顺序组织：`log`、`dns`、`ntp`、`certificate`、`endpoints`、`inbounds`、`outbounds`、`route`、`services`、`experimental`，最后是完整 JSON；Core 信息、选择和下载也在这里。TUI 界面目前仅英文，中文文档不代表存在中文界面。
 
-`Tab` 只在内容与本页动作间切换，`F6` 直达底部控制栏；方向键选择，`Enter` 执行，`Esc` 返回。不在输入框时，`1`–`5` 切换工作区，`[` / `]` 切换子页，`,` 打开 Settings。常用动作旁直接显示键位，输入框优先接收文字。建议终端至少 **80×24**，无需鼠标或 Nerd Font。
+方向键选择，`Enter` 执行，`Esc` 返回。不在输入框时，`1`–`3` 切换工作区，`[` / `]` 切换区段，`,` 打开 Config。底部稳定保留 `s` Start/Stop、`m` Mode 和 `t` TUN。页面动作旁直接显示键位，输入框优先接收文字。建议终端至少 **80×24**，无需鼠标或 Nerd Font。
 
 ## 使用前要知道
 

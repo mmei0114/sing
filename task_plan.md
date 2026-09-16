@@ -1,5 +1,18 @@
 # singbox TUI 产品设计计划
 
+## 2026-09-17 — Surge-style 产品收敛与 Activity 分流（当前）
+
+用户最新指示取代 v1 规格中“五个主工作区”的导航约定：顶部只保留 Overview / Policies（分组与分流）/ Activity；Start / Mode / TUN 作为稳定底部控制；低频和原生配置进入 Config，其组织尽量跟随 sing-box 配置顶层结构。
+
+- [x] 盘点当前 `surge-style-redesign` WIP 与未提交的共享编辑器；不覆盖用户现有改动。
+- [x] 修复当前编译基线，完成三工作区与减法后底栏；保留所有核心能力的可达路径。
+- [x] 完成 Policies：组选择/测速/编辑，规则顺序与编辑，订阅/规则来源入口；复用同一原生对象编辑语言。
+- [x] 完成 Activity：Connections / Apps / Logs，按时间或流量排序，从连接或已观测进程快速生成域名、后缀、正则、进程或 App+Domain 路由规则。
+- [x] 完成 Config：Core 信息/选择/下载，并按 log / dns / ntp / certificate / endpoints / inbounds / outbounds / route / services / experimental 结构编辑；DNS 使用同一列表+详情编辑语言。
+- [ ] 增加窄屏、键盘、快速规则、排序、原生保真回归；运行 fmt / test / clippy / release / 离线 preview，分阶段 Git 提交。
+
+边界：Activity 的 App 列表以 sing-box 实际观测到的网络连接为事实来源，不冒充 Little Snitch 的系统级完整进程库。开发验证不启停用户真实核心、不改真实系统代理/TUN，不自动推送。
+
 ## 2026-09-16 — Overview 与 Actions 收敛（当前）
 
 用户已批准实施：不加出口摘要；保留主页分组快捷选择，增加共享 Connections 小窗、实时流量/连接检查/接管证据；去掉无子页的空行；移除所有 : More，仅保留分类去重的底部 : Actions；区分首次引导和日常动作。
