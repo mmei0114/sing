@@ -22,7 +22,12 @@ use std::{
 };
 
 pub const CORE_VERSION: &str = "1.14.0";
+/// Bumped whenever the UI depends on new manager actions.
+pub const PROTOCOL: u32 = 10;
+mod controls;
+mod cores;
 mod selection;
+pub use cores::{CoreInfo, CoreReport};
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "action", content = "data", rename_all = "snake_case")]
 pub enum Action {
@@ -113,6 +118,22 @@ pub enum Action {
         id: String,
         delta: i32,
     },
+    /// Live Rule / Global / Direct switch; no restart.
+    SetMode(String),
+    /// Live Global-mode target through the generated GLOBAL selector.
+    SetGlobalTarget(String),
+    /// macOS system proxy on/off; live when the core is running.
+    SetSystemProxy(bool),
+    /// Add or park the TUN inbound. Takes effect after Apply.
+    SetTun {
+        enabled: bool,
+        revision: String,
+    },
+    CoreReport {
+        releases: bool,
+    },
+    InstallCoreVersion(String),
+    SelectCore(String),
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RulesPreview {
@@ -209,6 +230,8 @@ pub struct Reply {
     pub preview: Option<ImportPreview>,
     pub config: Option<String>,
     pub needs_auth: bool,
+    #[serde(default)]
+    pub cores: Option<CoreReport>,
 }
 impl Reply {
     fn success(message: impl Into<String>) -> Self {
@@ -226,6 +249,7 @@ impl Reply {
             preview: None,
             config: None,
             needs_auth: false,
+            cores: None,
         }
     }
     fn error(e: anyhow::Error) -> Self {
@@ -312,7 +336,7 @@ struct PendingRules {
     id: String,
     unbound: bool,
 }
-struct Manager {
+pub(crate) struct Manager {
     selection_recovery: String,
     pending_rules: Option<PendingRules>,
     lease: proxy_helper::Lease,
@@ -475,7 +499,7 @@ impl Manager {
         store.native = store.native.as_ref().map(config::redacted);
         Snapshot {
             selection_recovery: self.selection_recovery.clone(),
-            manager_protocol: 9,
+            manager_protocol: PROTOCOL,
             system_proxy,
             connectivity: if connected {
                 self.connectivity.clone()
@@ -1859,6 +1883,13 @@ impl Manager {
                 ))
             }
             Action::Connect => self.connect().await,
+            Action::SetMode(mode) => self.set_mode(mode).await,
+            Action::SetGlobalTarget(target) => self.set_global_target(target).await,
+            Action::SetSystemProxy(on) => self.set_system_proxy(on),
+            Action::SetTun { enabled, revision } => self.set_tun(enabled, revision),
+            Action::CoreReport { releases } => self.core_report(releases).await,
+            Action::InstallCoreVersion(version) => self.install_core_version(version).await,
+            Action::SelectCore(path) => self.select_core(path).await,
             Action::Disconnect => {
                 self.stop()?;
                 self.running = None;
@@ -2112,7 +2143,7 @@ pub fn find_core(dir: &Path, custom: &str) -> Option<PathBuf> {
             .find(|p| p.is_file())
     })
 }
-async fn core_version(core: &Path) -> Result<String> {
+pub(crate) async fn core_version(core: &Path) -> Result<String> {
     let output = tokio::time::timeout(
         Duration::from_secs(5),
         tokio::process::Command::new(core)
@@ -2129,7 +2160,7 @@ async fn core_version(core: &Path) -> Result<String> {
         .trim()
         .to_string())
 }
-fn supported_version(version: &str) -> bool {
+pub(crate) fn supported_version(version: &str) -> bool {
     version
         .split_whitespace()
         .last()
@@ -2286,7 +2317,7 @@ fn startup_error(dir: &Path, offset: u64, store: &Store) -> String {
     }
 }
 
-async fn install_core(dir: &Path) -> Result<PathBuf> {
+pub(crate) async fn install_core(dir: &Path) -> Result<PathBuf> {
     let os = match std::env::consts::OS {
         "macos" => "darwin",
         "linux" => "linux",

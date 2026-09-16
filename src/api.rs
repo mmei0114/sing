@@ -133,8 +133,35 @@ pub struct Connection {
 pub struct ProcessInfo {
     #[prost(uint32, tag = "1")]
     pub pid: u32,
+    #[prost(int32, tag = "2")]
+    #[serde(default)]
+    pub user_id: i32,
+    #[prost(string, tag = "3")]
+    #[serde(default)]
+    pub user_name: String,
     #[prost(string, tag = "4")]
     pub path: String,
+    #[prost(string, repeated, tag = "5")]
+    #[serde(default)]
+    pub package_names: Vec<String>,
+}
+impl ProcessInfo {
+    /// Executable base name; the value sing-box matches with `process_name`.
+    pub fn name(&self) -> &str {
+        self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
+    }
+}
+#[derive(Clone, PartialEq, Message, Serialize, Deserialize)]
+pub struct ClashMode {
+    #[prost(string, tag = "3")]
+    pub mode: String,
+}
+#[derive(Clone, PartialEq, Message, Serialize, Deserialize)]
+pub struct ClashModeStatus {
+    #[prost(string, repeated, tag = "1")]
+    pub modes: Vec<String>,
+    #[prost(string, tag = "2")]
+    pub current: String,
 }
 #[derive(Clone, PartialEq, Message)]
 pub struct ConnectionEvent {
@@ -313,10 +340,106 @@ impl Api {
             "Selection was sent but not confirmed by the core. Refresh groups before retrying."
         )
     }
+    pub async fn mode_status(&mut self) -> Result<ClashModeStatus> {
+        self.unary("/daemon.StartedService/GetClashModeStatus", Empty {})
+            .await
+    }
+    pub async fn set_mode(&mut self, mode: String) -> Result<()> {
+        let _: Empty = self
+            .unary("/daemon.StartedService/SetClashMode", ClashMode { mode })
+            .await?;
+        Ok(())
+    }
     pub async fn test(&mut self, tag: String) -> Result<()> {
         let _: Empty = self
             .unary("/daemon.StartedService/URLTest", Test { outbound_tag: tag })
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    #[ignore = "Requires SING_TEST_CORE; loopback-only, no TUN or system changes"]
+    fn clash_mode_switches_live_and_connections_report_process() {
+        let core = std::env::var("SING_TEST_CORE").expect("Set SING_TEST_CORE");
+        let dir = tempfile::tempdir().unwrap();
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let (api_port, proxy_port) = (free(), free());
+        let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in target.incoming().flatten() {
+                use std::io::Write;
+                let mut s = s;
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let config = json!({
+            "log":{"level":"warn"},
+            "inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":proxy_port}],
+            "outbounds":[{"type":"direct","tag":"direct"},{"type":"block","tag":"blocked"}],
+            "route":{"find_process":true,"rules":[
+                {"clash_mode":"direct","action":"route","outbound":"direct"},
+                {"clash_mode":"global","action":"route","outbound":"blocked"}],"final":"direct"},
+            "services":[{"type":"api","tag":"management","listen":"127.0.0.1","listen_port":api_port,"secret":"s"}],
+            "experimental":{"clash_api":{"default_mode":"rule"}}
+        });
+        let path = dir.path().join("c.json");
+        std::fs::write(&path, config.to_string()).unwrap();
+        let mut child = std::process::Command::new(core)
+            .args(["run", "-c"])
+            .arg(&path)
+            .arg("-D")
+            .arg(dir.path())
+            .spawn()
+            .unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let mut api = None;
+            for _ in 0..50 {
+                if let Ok(mut a) = Api::connect(api_port, "s").await {
+                    if a.version().await.is_ok() {
+                        api = Some(a);
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let mut api = api.expect("api");
+            let status = api.mode_status().await?;
+            eprintln!("modes {:?} current {}", status.modes, status.current);
+            api.set_mode("direct".into()).await?;
+            eprintln!("after set: {}", api.mode_status().await?.current);
+            let client = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all(format!(
+                    "http://127.0.0.1:{proxy_port}"
+                ))?)
+                .build()?;
+            let _ = client
+                .get(format!("http://127.0.0.1:{target_port}/"))
+                .send()
+                .await;
+            let cs = api.connections().await?;
+            for c in &cs {
+                eprintln!(
+                    "conn {} rule={} out={} process={:?}",
+                    c.destination, c.rule, c.outbound, c.process
+                );
+            }
+            anyhow::Ok(())
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        result.unwrap();
     }
 }

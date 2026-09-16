@@ -518,30 +518,109 @@ pub fn effective(store: &Store) -> Result<Value> {
             && i.get("users").is_none_or(|u| u.as_array().is_some_and(Vec::is_empty))),
             "System integration needs an unauthenticated mixed inbound at 127.0.0.1 on its configured port");
     }
-    match store.settings.route_mode.as_str() {
-        "rule" => {}
-        "global" | "direct" => {
-            // Overrides are temporary; DNS, outbounds and their dependencies remain
-            // intact. The review explicitly discloses unchanged DNS and exceptions.
-            let mut rules: Vec<_> = array(&doc, "/route/rules")
-                .iter()
-                .filter(|r| r["action"] == "sniff" || r["action"] == "hijack-dns")
-                .cloned()
-                .collect();
-            if store.settings.bypass_lan {
-                rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
-            }
-            doc["route"]["rules"] = json!(rules);
-            doc["route"]["final"] = if store.settings.route_mode == "direct" {
-                json!("direct")
-            } else {
-                json!(store.settings.global_target)
-            };
-        }
-        _ => bail!("Unknown routing override"),
-    }
+    ensure!(
+        ["rule", "global", "direct"].contains(&store.settings.route_mode.as_str()),
+        "Unknown routing mode"
+    );
+    live_modes(&mut doc, &store.settings)?;
     references(&doc)?;
     Ok(doc)
+}
+
+/// Selector generated for Global mode. It is part of the running configuration
+/// only; the saved native document never contains it.
+pub const GLOBAL_TAG: &str = "GLOBAL";
+const DIRECT_FALLBACK: &str = "sing-direct";
+
+/// Rule / Global / Direct are sing-box clash modes, switched live through the
+/// management API. Saved rules, DNS and outbounds are never rewritten: mode
+/// rules are inserted before the first rule that decides a route.
+fn live_modes(doc: &mut Value, settings: &crate::model::Settings) -> Result<()> {
+    let outbounds = array(doc, "/outbounds").to_vec();
+    ensure!(
+        !outbounds
+            .iter()
+            .chain(array(doc, "/endpoints"))
+            .any(|v| tag(v) == GLOBAL_TAG),
+        "Outbound tag {GLOBAL_TAG} is reserved for Global mode; rename that object"
+    );
+    let direct = outbounds
+        .iter()
+        .find(|v| v["type"] == "direct")
+        .map(|v| tag(v).to_string())
+        .unwrap_or_else(|| DIRECT_FALLBACK.into());
+    let mut members: Vec<String> = outbounds
+        .iter()
+        .filter(|v| ["selector", "urltest"].contains(&v["type"].as_str().unwrap_or("")))
+        .chain(outbounds.iter().filter(|v| {
+            !["selector", "urltest", "block", "dns"].contains(&v["type"].as_str().unwrap_or(""))
+        }))
+        .chain(array(doc, "/endpoints"))
+        .map(|v| tag(v).to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !members.contains(&direct) {
+        members.push(direct.clone());
+    }
+    let default = if members.contains(&settings.global_target) {
+        settings.global_target.clone()
+    } else {
+        members[0].clone()
+    };
+    let list = doc
+        .as_object_mut()
+        .context("Native configuration must be a JSON object")?
+        .entry("outbounds")
+        .or_insert(json!([]))
+        .as_array_mut()
+        .context("outbounds must be an array")?;
+    if direct == DIRECT_FALLBACK {
+        list.push(json!({"type":"direct","tag":DIRECT_FALLBACK}));
+    }
+    list.push(json!({"type":"selector","tag":GLOBAL_TAG,"outbounds":members,"default":default}));
+    let route = doc
+        .as_object_mut()
+        .unwrap()
+        .entry("route")
+        .or_insert(json!({}))
+        .as_object_mut()
+        .context("route must be an object")?;
+    let rules = route
+        .entry("rules")
+        .or_insert(json!([]))
+        .as_array_mut()
+        .context("route.rules must be an array")?;
+    let at = rules
+        .iter()
+        .position(|r| {
+            !["sniff", "resolve", "route-options", "hijack-dns"]
+                .contains(&r["action"].as_str().unwrap_or("route"))
+        })
+        .unwrap_or(rules.len());
+    let mut injected = vec![json!({"clash_mode":"direct","action":"route","outbound":direct})];
+    if settings.bypass_lan {
+        injected.push(
+            json!({"clash_mode":"global","ip_is_private":true,"action":"route","outbound":direct}),
+        );
+    }
+    injected.push(json!({"clash_mode":"global","action":"route","outbound":GLOBAL_TAG}));
+    for (i, rule) in injected.into_iter().enumerate() {
+        rules.insert(at + i, rule);
+    }
+    let experimental = doc
+        .as_object_mut()
+        .unwrap()
+        .entry("experimental")
+        .or_insert(json!({}))
+        .as_object_mut()
+        .context("experimental must be an object")?;
+    let clash = experimental
+        .entry("clash_api")
+        .or_insert(json!({}))
+        .as_object_mut()
+        .context("experimental.clash_api must be an object")?;
+    clash.insert("default_mode".into(), json!(settings.route_mode));
+    Ok(())
 }
 
 pub fn references(doc: &Value) -> Result<()> {
@@ -822,7 +901,7 @@ pub fn review(saved: &Store, running: Option<&Store>) -> Result<String> {
         saved.settings.route_mode
     );
     if saved.settings.route_mode != "rule" {
-        result.push_str("Override replaces routing decisions; sniff/DNS actions and optional private-IP exception remain. DNS servers/rules and their outbound paths are UNCHANGED. Direct is a traffic-routing override, not a no-proxy guarantee for internal DNS.\n\n");
+        result.push_str("Global / Direct take precedence over your rules; switching mode later is live and needs no restart. DNS servers/rules and their outbound paths are UNCHANGED.\n\n");
     }
     if uses_tun(saved) {
         result.push_str(
@@ -1054,7 +1133,37 @@ mod tests {
             let c = effective(&s).unwrap();
             assert_eq!(c["dns"], before["dns"]);
             assert_eq!(c["outbounds"], before["outbounds"]);
+            assert_eq!(c["route"]["rules"], before["route"]["rules"]);
+            assert_eq!(c["experimental"]["clash_api"]["default_mode"], mode);
         }
+    }
+    #[test]
+    fn live_modes_precede_first_route_rule_and_keep_saved_document() {
+        let mut s = store();
+        s.native.as_mut().unwrap()["route"]["rules"] = json!([
+            {"action":"sniff"},
+            {"protocol":"dns","action":"hijack-dns"},
+            {"domain_suffix":["example.invalid"],"action":"route","outbound":"direct"}
+        ]);
+        let saved = s.native.clone().unwrap();
+        let c = effective(&s).unwrap();
+        let rules = array(&c, "/route/rules");
+        assert_eq!(rules[2]["clash_mode"], "direct");
+        assert_eq!(rules[3]["ip_is_private"], true);
+        assert_eq!(rules[4]["outbound"], GLOBAL_TAG);
+        assert_eq!(rules[5]["domain_suffix"][0], "example.invalid");
+        let global = array(&c, "/outbounds")
+            .iter()
+            .find(|v| tag(v) == GLOBAL_TAG)
+            .unwrap();
+        assert!(array(global, "/outbounds").iter().any(|m| m == "proxy"));
+        assert_eq!(global["default"], "proxy");
+        assert_eq!(s.native.as_ref().unwrap(), &saved);
+        s.native.as_mut().unwrap()["outbounds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"direct","tag":GLOBAL_TAG}));
+        assert!(effective(&s).is_err());
     }
     #[test]
     fn dependency_cycle_detected_across_dns_and_outbound() {

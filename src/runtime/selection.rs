@@ -119,6 +119,9 @@ impl Manager {
         }
     }
     pub(super) async fn select_native(&mut self, group: String, member: String) -> Result<Reply> {
+        if group == native::GLOBAL_TAG {
+            return self.set_global_target(member).await;
+        }
         ensure!(
             self.connected(),
             "Start the core to select a live member. To change startup defaults, use Edit Group."

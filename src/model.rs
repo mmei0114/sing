@@ -208,6 +208,10 @@ pub struct Settings {
     pub core: String,
     pub rules: Vec<Rule>,
     pub auto_update: bool,
+    /// The TUN inbound removed by the TUN switch, restored verbatim when the
+    /// switch is turned on again so custom TUN options are not lost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parked_tun: Option<Value>,
 }
 fn ipv4_strategy() -> String {
     "ipv4_only".into()
@@ -229,6 +233,7 @@ impl Default for Settings {
             core: String::new(),
             rules: vec![],
             auto_update: false,
+            parked_tun: None,
         }
     }
 }

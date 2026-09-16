@@ -1351,7 +1351,7 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
             .snapshot
             .context("No manager snapshot")?
     };
-    ensure!(demo||snap.manager_protocol>=9,"Old manager detected. Close old interfaces, run ./sing --shutdown, then reopen ./sing. Shutdown stops the old core; saved data remains intact.");
+    ensure!(demo||snap.manager_protocol>=runtime::PROTOCOL,"Old manager detected. Close old interfaces, run ./sing --shutdown, then reopen ./sing. Shutdown stops the old core; saved data remains intact.");
     let mut a = App::new(snap, demo);
     let (tx, rx) = mpsc::channel::<(Action, bool)>();
     let (out, results) = mpsc::channel::<(Result<Reply>, bool)>();
@@ -1549,6 +1549,7 @@ fn demo_action(a: &mut App, action: Action) -> Result<()> {
                 preview: None,
                 config: None,
                 needs_auth: false,
+                cores: None,
             };
             if let Some(next) = a.receive(r)? {
                 demo_action(a, next)?;

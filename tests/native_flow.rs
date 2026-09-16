@@ -148,7 +148,7 @@ fn native_migration_edit_apply_conflict_and_rollback() {
     assert_eq!(backup["schema"], 1);
     assert!(backup["native"].is_null());
     let snap = ok(dir, "snapshot", Value::Null);
-    assert_eq!(snap["snapshot"]["manager_protocol"], 9);
+    assert_eq!(snap["snapshot"]["manager_protocol"], 10);
     assert!(!snap.to_string().contains("test-secret"));
     assert_eq!(snap["snapshot"]["connected"], false);
     let mut edit = ok(dir, "read_native", json!(""))["edit"].clone();
@@ -309,6 +309,37 @@ fn native_migration_edit_apply_conflict_and_rollback() {
             .clone()
     };
     assert_eq!(live(&snap), "proxy");
+    // Live mode switching and the Global target never restart the core or
+    // create an unapplied draft.
+    let pid_before = std::fs::read_to_string(dir.join("core.log")).unwrap().len();
+    for mode in ["global", "direct", "rule"] {
+        ok(dir, "set_mode", json!(mode));
+        let snap = ok(dir, "snapshot", Value::Null);
+        assert_eq!(snap["snapshot"]["store"]["settings"]["route_mode"], mode);
+        assert_eq!(snap["snapshot"]["dirty"], false);
+        assert_eq!(snap["snapshot"]["connected"], true);
+    }
+    ok(dir, "set_global_target", json!("direct"));
+    let snap = ok(dir, "snapshot", Value::Null);
+    let global = snap["snapshot"]["groups"]["group"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["tag"] == "GLOBAL")
+        .unwrap()
+        .clone();
+    assert_eq!(global["selected"], "direct");
+    assert_eq!(snap["snapshot"]["dirty"], false);
+    assert!(std::fs::read_to_string(dir.join("core.log")).unwrap().len() >= pid_before);
+    // TUN switch edits only the draft and asks for an explicit restart.
+    let revision = ok(dir, "read_native", json!(""))["edit"]["revision"].clone();
+    let tun = ok(dir, "set_tun", json!({"enabled":true,"revision":revision}));
+    assert_eq!(tun["confirm"]["action"], "apply_native");
+    let revision = ok(dir, "read_native", json!(""))["edit"]["revision"].clone();
+    ok(dir, "set_tun", json!({"enabled":false,"revision":revision}));
+    let snap = ok(dir, "snapshot", Value::Null);
+    assert!(snap["snapshot"]["store"]["settings"]["parked_tun"]["type"] == "tun");
+    assert_eq!(snap["snapshot"]["running_tun"], false);
     let remembered = std::fs::read(dir.join("selections.json")).unwrap();
     assert_eq!(
         rpc(
