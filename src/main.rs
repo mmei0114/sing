@@ -6,7 +6,7 @@ mod ruleset;
 mod runtime;
 mod subscription;
 mod system_proxy;
-mod ui;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
         return runtime::daemon(&dir);
     }
     if args.preview {
-        return ui::preview();
+        return tui::preview();
     }
     if args.status || args.disconnect || args.shutdown {
         let response = runtime::request(
@@ -97,5 +97,5 @@ fn main() -> Result<()> {
         anyhow::ensure!(response.ok, "{}", response.message);
         return Ok(());
     }
-    ui::run(dir, args.demo)
+    tui::run(dir, args.demo)
 }

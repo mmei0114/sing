@@ -1667,6 +1667,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tonic",
+ "unicode-width 0.2.0",
  "url",
 ]
 

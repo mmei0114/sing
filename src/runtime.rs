@@ -185,6 +185,9 @@ pub struct ImportPreview {
 }
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Snapshot {
+    /// Unix seconds when the running core became ready; 0 when stopped.
+    #[serde(default)]
+    pub started_at: u64,
     #[serde(default)]
     pub selection_recovery: String,
     #[serde(default)]
@@ -353,6 +356,7 @@ pub(crate) struct Manager {
     api_ready: bool,
     version: String,
     last_sample: u64,
+    started_at: u64,
 }
 impl Drop for Manager {
     fn drop(&mut self) {
@@ -498,6 +502,7 @@ impl Manager {
         }
         store.native = store.native.as_ref().map(config::redacted);
         Snapshot {
+            started_at: if connected { self.started_at } else { 0 },
             selection_recovery: self.selection_recovery.clone(),
             manager_protocol: PROTOCOL,
             system_proxy,
@@ -1009,6 +1014,7 @@ impl Manager {
                     self.version = version.version;
                     self.api_ready = true;
                     self.log("Core ready · native gRPC connected");
+                    self.started_at = model::now();
                     self.restore_selections(store).await;
                     if store.settings.mode == "system" {
                         self.lease.set(true);
@@ -2007,6 +2013,7 @@ pub fn daemon(dir: &Path) -> Result<()> {
         api_ready: false,
         version: String::new(),
         last_sample: 0,
+        started_at: 0,
         selection_recovery: String::new(),
     };
     manager.log("Manager ready · q closes only the interface");
