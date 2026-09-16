@@ -1,5 +1,13 @@
 # 进度
 
+## 2026-09-16 — GitHub 首次公开发布准备
+
+- 用户明确授权公开到 GitHub，并确认仓库 sing、MIT。只读核对实际账号 mmei0114 和现有仓库，创建新公开仓库 https://github.com/mmei0114/sing ，没有改动既有项目。
+- 英文 README 重写为定位、真实预览、功能、快速开始、导航、边界与贡献入口；增加 README.zh-CN.md，原详细说明迁至 docs/usage.md。按照文档技能做独立无上下文读者审查，补全实际代理端口、Apply/Start、恢复命令、私有数据目录和手动核心获取说明。
+- 新增 MIT 全文、CHANGELOG、CONTRIBUTING、SECURITY、隐私提醒问题模板、PR 模板、最小权限/固定 action SHA 的 macOS/Linux CI、源码预览版 release notes。没有新增客户端运行功能或切换用户网络；没有公开第三方 core 二进制。
+- 新增可复现文档图与链接脚本；SVG 来自真实 ./sing --preview，已渲染成 PNG 检视，不含用户数据。YAML 解析、Markdown 本地链接、git diff --check、122 普通测试、fmt 与 Clippy 全目标通过。历史初筛未发现高置信度密钥/token 或私有状态路径；不将模式扫描宣称为绝对无泄漏保证。
+- Superpowers/planning 技能路径仍缺失，继续三文件记录。GitHub 推送、topics、安全私报、远端 CI 和版本发布尚待下方完成记录，不把创建空仓库算作源码已发布。
+
 ## 2026-09-16 — sing 0.6.0 本地交付
 
 - 完成 M2 主流程收尾：Native Source/SRS 的 local/remote 引用进入规则导入同一父事务；保留 source/binary 格式、核心加载与更新归属，不虚构规则数量。真实 core 验证本地 SRS 编译、绑定、加载；DNS 不随导入改变。订阅 Refresh Preview 只重取原来源、失败保留旧预览，规则 Change Source 重新取得 revision/上下文并保留输入和内联组，顺序变化要求重审位置。

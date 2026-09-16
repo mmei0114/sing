@@ -1,0 +1,15 @@
+name: Feature request / 功能建议
+description: Describe the task you want to accomplish, not just a new setting.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Include the platform and what is difficult in the current workflow. No private subscription data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: How should this fit native sing-box semantics? Links to official documentation are helpful.

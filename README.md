@@ -1,133 +1,108 @@
-# sing
+# sing — a native sing-box TUI
 
-An English terminal client for sing-box on macOS and Linux. Runtime control uses the official sing-box 1.14+ gRPC service, not a Clash compatibility layer. Subscription and QX/Clash rule conversion happen locally.
+**Your subscriptions, proxy groups and routing rules. One terminal.**
 
-## 0.6.0 — product workspaces
+[![CI](https://github.com/mmei0114/sing/actions/workflows/ci.yml/badge.svg)](https://github.com/mmei0114/sing/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.6.0-4c8bf5)](https://github.com/mmei0114/sing/releases/tag/v0.6.0)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Five workspaces, visible keyboard actions, and one authoritative native configuration:
+English · [简体中文](README.zh-CN.md)
 
-| Workspace | Pages |
-|---|---|
-| Overview | Status, connection setup, common groups |
-| Proxies | Proxy Groups, Nodes, Subscriptions |
-| Routing | Rules, Rule Sets |
-| Network | Capture, Inbounds, DNS → Servers / Rules / Options |
-| Activity | Connections, Logs, Diagnostics |
+sing is an independent, keyboard-first **terminal UI for [sing-box](https://sing-box.sagernet.org/)**, built in Rust with Ratatui. Import subscriptions, choose a proxy, create groups, and bind rule sets without writing JSON for everyday tasks. When you need more control, edit the underlying native configuration without losing fields the forms do not expose.
 
-Settings is a global button: Core, Interface, Client, Advanced Tools. Advanced Tools keeps access to endpoints, services, experimental options and the complete native document; it does not duplicate DNS or TUN editors.
+**Native sing-box semantics. A more approachable client.** No Clash compatibility API or third-party subscription-conversion service is required.
 
-This release implements the main product workflows. The built executable has been tested on macOS arm64 with sing-box 1.14.0. **Real System Proxy/TUN, Linux/SSH host recovery and first-time user acceptance remain unverified.** See [acceptance and limitations](docs/acceptance-0.6.0.md). This is not a claim of comprehensive platform validation or improved video throughput.
+![sing Overview rendered from the real 0.6.0 demo: five workspaces, connection controls, import actions and separate core, capture and Internet-check states](docs/assets/overview.svg)
 
-## Upgrade safely
+*Actual `sing --preview` output, rendered as SVG. Fictional demo data; no live traffic.*
 
-0.6.0 requires manager protocol **9**. Replacing the executable does not restart an existing manager or change networking.
+[Get started](#get-started) · [Features](#what-you-can-do) · [User guide](docs/usage.md) · [Contribute](CONTRIBUTING.md) · [Report a bug](https://github.com/mmei0114/sing/issues/new/choose)
 
-1. Close old interfaces with `q`.
-2. When you are ready to interrupt the current connection, run `./sing --shutdown`. This restores sing-managed proxy settings and stops the old manager/core. If restoration fails, resolve it before continuing.
-3. Run `./sing`.
-4. Existing native drafts remain intact. For a pre-native configuration, use the offered initialization review: a private `pre-native-state.json` backup is created before adoption.
-5. Use **Review Changes**, inspect the summary / **Native Diff**, then explicitly choose **Apply**.
+> **Early release:** macOS Apple Silicon is the locally tested build. Linux is a target platform; real Linux/SSH networking and privileged System Proxy/TUN recovery are not yet acceptance-tested. Review the [verification record](docs/acceptance-0.6.0.md) before relying on sing for critical connectivity. This project is not an official SagerNet client.
 
-No application data was migrated or network takeover enabled during development. The source baseline is Git commit `b476cdb`. The previous 0.5.1 executable is backed up locally under `.build/backups/v0.5.1-f70AYn2u/sing`; generated binaries/backups are excluded from Git.
+## What you can do
 
-Do not downgrade an active data directory blindly. Preserve it first; stop its manager before restoring a compatible private state backup. Git contains source, not subscription credentials or runtime state.
+- **Bring your subscriptions.** Import supported node links, subscription URLs, Clash node YAML or sing-box node JSON. Preview updates before saving; update one source or all sources together.
+- **Build groups in one step.** Search and select members, choose a manual selector or automatic latency-testing group, then save once. Nested groups and native defaults remain available.
+- **Route by rule set.** Convert supported Quantumult X (QX), Clash, domain and IP lists locally, or keep native Source/SRS resources. Choose the target group and rule position in the same flow. Unsupported entries are reported, not silently accepted.
+- **Keep DNS independent.** Manage DNS servers, DNS rules and options in one place. Importing a routing rule set does not rewrite your DNS settings.
+- **Review before applying.** Read an object-level summary or a redacted native diff. Saving a draft does not restart the core; Apply is explicit.
+- **See what is actually running.** API-confirmed group choices, observed connections, logs and diagnostics distinguish core readiness, traffic capture and Internet checks. Successful manual selections can survive Apply without overwriting group defaults.
 
-## Run
+Runtime control uses the official sing-box 1.14+ gRPC service. Compatibility has been tested with **1.14.0**; future core releases are not automatically guaranteed compatible.
+
+## Get started
+
+### Build and try it
+
+You need Git, a Rust toolchain with Cargo, and a terminal. Rust **1.94.0** is the tested toolchain; install Rust using the [official instructions](https://www.rust-lang.org/tools/install). On macOS, install Xcode Command Line Tools if a linker is missing; Linux needs a C linker/build toolchain.
 
 ```sh
+git clone https://github.com/mmei0114/sing.git
+cd sing
 cargo build --release --locked
-./sing
 ./sing --demo
-./sing --preview
 ```
 
-The launcher prefers `target/release/sing`. `--demo` uses fictional in-memory data and never changes the network; it is not a substitute for real import/network tests. `--preview` prints a static sample. `--data-dir /absolute/path` selects an independent private instance.
-
-Use 80 × 24 or larger; 54 × 18 is supported with scrolling. Wide terminals show a list/detail split. No mouse or special icon font is required.
-
-## Three common tasks
-
-### Import a subscription and connect
-
-Choose **Import Subscription** on Overview or Proxies. Paste a subscription URL, supported node links, common Clash node YAML, sing-box node JSON, or a local path. This imports nodes, **not** another client's whole DNS/routing configuration.
-
-Name is optional. Expand **Advanced** only if your provider requires a User-Agent.
-
-Review → **Save & Set Up** → choose target, mode and capture → **Review Setup** → **Save Draft** → separate **Review Changes / Apply**. **Save Only** ends after importing; Overview's **Connection Setup** resumes later. Existing DNS, rules and complex listeners are not reset.
-
-Capture choices:
-
-- **Proxy Ports**: configure individual applications to use the local HTTP/SOCKS listener. Merely starting a core does not proxy every application.
-- **System Proxy**: local macOS only; supported applications use OS proxy settings. Requires explicit authorization and a matching loopback listener.
-- **TUN**: an actual native inbound, requiring administrator authorization. It can affect routes and interface DNS, and interrupt SSH. Existing TUN objects remain editable in Inbounds.
-- **Keep current capture** preserves complex configurations. Switching to Ports/System does not silently delete existing TUN listeners.
-
-Over SSH, sing controls the **remote host**, not your local computer. Linux desktop system-proxy integration is not provided.
-
-Subscriptions has **Update**, **Update All**, preview/cancel and **Refresh Preview**. Batch updates save once; a failed source does not partially update the draft. Owned nodes with local edits or surviving references are reported as conflicts, not silently overwritten/deleted.
-
-### Create a proxy group
-
-Proxies → **New Group**. Set a display name, choose Manual (selector) or Automatic (urltest), search by name/source, select members, choose the manual default, then save once.
-
-Group/endpoint members and unknown native fields are preserved. Empty groups, invalid defaults and cycles are rejected. Display names do not rename stable native tags. Automatic groups expose their test URL, interval and tolerance; lowest latency does not guarantee best throughput or streaming access.
-
-**Select Member** controls a running manual group. sing waits for an API readback before calling it selected, and remembers successful choices separately in private `selections.json`. Runtime selection does not edit the native default or create a pending structural draft.
-
-On Start/Apply, a remembered choice is eligible only if its group/member remain valid and the default has not changed. Automatic groups remain core-controlled. With native cache-file restoration enabled, sing leaves recovery to the core. Restoration failure is shown on Overview/Activity; cached choices are never displayed as live evidence. Existing connections may retain their old route.
-
-When stopped, use **Edit** to change the default member, or start the core before choosing a live member.
-
-### Import and route a rule set
-
-Routing → **Import Rule Set** → source/format → target and insertion position → **Save Rule to Draft** → Review/Apply. **New Group** inside this flow is staged with the resource and route: cancel leaves no orphan group.
-
-Formats:
-
-- **auto / qx / clash / domain / ipcidr**: supported external list conditions are converted locally. Read conversion warnings before accepting exclusions; foreign policy names are not executed.
-- **native**: native JSON source conditions, including logical rules, are preserved as an inline resource. No flattening through the external converter.
-- **native-source / native-srs**: retain native local/remote references and source/binary formats. Auto recognizes URLs/paths ending in `.srs`. File paths are resolved on the host running sing. No rule count is invented: content is loaded by the selected core on Apply/Start.
-- More native HTTP, cache, interval or other fields are available in the same resource's editor/Native JSON. Remote-resource updates belong to the core, not **Update Converted**.
-
-Import does not change DNS. One native rule set can be used by both Route and DNS. First matching terminal routing actions and original ordering remain meaningful; nonterminal and logical rules are preserved.
-
-## Navigation and editing
-
-- `1`–`5`: the five workspaces. `,`: Settings.
-- `Tab` / `Shift+Tab`: move focus between visible controls. Arrows choose; Enter activates. Text fields take precedence over global shortcuts.
-- `/`: filter the current list. `:` or **Actions / More**: searchable actions.
-- `a` Add, `e` Edit, `E` Native JSON, `x` Remove; `J/K` reorder rules.
-- `F2` / `Ctrl+S` or the visible Save button: save a draft. Save is not Apply.
-- **References** shows Uses / Used by; **Back to References** restores the original list/filter/selection. Removal/rename cannot leave recognized native references dangling. Atomic edits to the full native document can update definitions and references together.
-- `A` / **Review Changes**: readable summary, expandable redacted Native Diff, explicit Apply. Application validates first, then restarts the core and can interrupt connections.
-- `M`: Rule / Global / Direct. Global/Direct override traffic routing without deleting saved rules. DNS and internal dial paths are not implicitly rewritten; Direct is not an unconditional no-proxy guarantee for internal DNS.
-- `t`: URL latency test, not a bandwidth test. `V`: core configuration check. `v` on Overview: explicit HTTPS connectivity probe.
-- `q`: close only the interface; a running manager/core stays active. Stop / `d` restores managed proxy settings before stopping.
-
-Failed submitted operations retain the original editor/preview behind an error-details view. Back does not automatically retry a write. If an apply review becomes stale, close it and request Review Changes again. Rule **Change Source** reloads current context while keeping entered source and the staged group; changed order requires position review. Subscription **Refresh Preview** re-fetches the original preview's sources.
-
-## Native capabilities and privacy
-
-The native JSON document is authoritative. Forms modify their fields and retain unknown siblings. Native JSON provides fields without dedicated forms; preservation is semantic JSON, not comments/whitespace. The selected core determines version/platform validity.
-
-The protected `management` API service must retain its loopback address, port, secret and non-TLS transport. Change its port through Settings. Native profiles that remove this integration cannot be controlled by sing.
-
-DNS Servers / Rules / Options are independent: website resolution, final DNS, bootstrap/default domain resolver and outbound detour have different roles. Blank DNS detour means direct dialing. Additional TLS, transport, FakeIP, logical/process rules and advanced inbound/outbound settings remain accessible natively; supporting an editor is not evidence of measured DNS leakage or performance.
-
-Connections shows actual core observations, not a predicted route. Logs/Diagnostics, core/API readiness, capture and Internet checks are separate. Not all applications expose process identity.
-
-Sources, known credentials, normal snapshots and diffs are redacted. Raw native editors intentionally expose secrets; unknown extension fields cannot be universally classified. Do not share raw-editor screenshots, `state.json`, `runtime.json` or private data backups.
-
-## Verification and remaining limits
+The demo uses fictional, in-memory data and never starts a proxy or changes your network. Exit with `q`, then launch the real client:
 
 ```sh
-cargo test --offline --locked
-cargo fmt --check
-cargo clippy --offline --locked --all-targets -- -D warnings
-SING_TEST_CORE=/absolute/path/to/sing-box cargo test --offline --locked -- \
-  --ignored --skip install_official_core --skip public_youtube_rule_conversion --nocapture
+./sing
 ```
 
-The explicit suite uses temporary fictional data, loopback services, a MOCK system-proxy helper and read-only macOS inventory. It never enables real proxy/TUN takeover.
+Prefer a command on your PATH? From the cloned repository, use `cargo install --path . --locked` and then `sing`. There is no official Homebrew formula or crates.io installation in this release. Do not assume an unrelated package named `sing` is this project.
 
-See [0.6.0 acceptance](docs/acceptance-0.6.0.md) for passed versus untested items. Full-profile import assistance, DNS/path timing diagnostics, subscription scheduling, dynamic group membership and hardened autostart services are outside this release. Real provider reachability, DNS leakage, throughput and device-wide takeover still need host-specific testing.
+### Make your first connection
+
+1. Open **Settings → Core → Install Core**, or set the path to a compatible sing-box executable. The built-in installer downloads the pinned official core and checks its SHA-256. The core is not bundled with this repository.
+2. Choose **Import Subscription** on Overview. Paste your source, review the nodes, then choose **Save & Set Up**.
+3. Choose your target, routing mode and capture method. **Proxy Ports** needs application proxy settings; **System Proxy** is local macOS integration; **TUN** requires elevated permission and can interrupt networking.
+4. **Save Draft**, inspect **Review Changes**, then explicitly **Apply**. Apply starts a stopped core or restarts a running one; you do not need a second Start after a successful Apply.
+
+Starting a core alone does **not** proxy every application. Over SSH, sing manages the **remote host**, not your local computer. Do not try TUN takeover over your only critical SSH connection.
+
+For Proxy Ports, find the loaded listener in **Network → Inbounds**. The generated mixed listener defaults to `127.0.0.1:2080` and accepts HTTP or SOCKS; use your actual configured address/port in the application's proxy settings. That port is a proxy endpoint, not a website. If core download is unavailable, obtain the matching architecture from [official sing-box releases](https://github.com/SagerNet/sing-box/releases/tag/v1.14.0) and set its executable path in Settings.
+
+Use **Stop** to disconnect. `q` closes the interface but leaves a running core active. Upgrading an existing installation? Read the [safe upgrade steps](docs/usage.md#upgrade-safely) first.
+
+## Find your way around
+
+| Workspace | What belongs here |
+|---|---|
+| **Overview** | Connection status, setup and common groups |
+| **Proxies** | Proxy Groups · Nodes · Subscriptions |
+| **Routing** | Ordered Rules · Rule Sets |
+| **Network** | Capture · Inbounds · DNS Servers / Rules / Options |
+| **Activity** | Connections · Logs · Diagnostics |
+
+Settings is global. Advanced native editors are available without duplicating DNS or TUN objects.
+
+`Tab` moves focus, arrows select, `Enter` activates, and `Esc` goes back. `1`–`5` switch workspaces outside text fields; `?` opens help. Visible buttons cover the main tasks—shortcuts are optional. Use an **80×24 or larger** terminal; no mouse or Nerd Font is required.
+
+## A few important distinctions
+
+**Is this a new proxy engine?** No. sing manages sing-box; sing-box handles traffic. Your provider and nodes are still your own.
+
+**Does it import entire Clash or QX configurations?** No. Node subscriptions and supported rule lists are imported separately. Their DNS, scripts and other application settings are not translated wholesale. See [formats and native resources](docs/usage.md#import-and-route-a-rule-set).
+
+**Does Rule / Global / Direct replace sing-box routing?** No. Rule uses your saved native rules; Global/Direct apply explicit runtime overrides without deleting them. DNS and internal dial paths are not silently rewritten.
+
+**Are all platforms and advanced features verified?** No. Native fields remain accessible, but a field editor is not proof of platform support. There is no Linux desktop system-proxy integration, Windows support, subscription scheduler or automatic service installation in this release. Latency tests do not measure download speed. See [known limits](docs/acceptance-0.6.0.md#remaining-limitations).
+
+## Documentation and contributing
+
+- [User guide](docs/usage.md): subscriptions, groups, routing, DNS, native editing and recovery.
+- [Verification and limits](docs/acceptance-0.6.0.md): what was tested and what still needs real-host acceptance.
+- [Contributing](CONTRIBUTING.md): build, test and submit reproducible reports or focused changes.
+- [Security](SECURITY.md): private reporting and what never to include in public logs or screenshots.
+- [Changelog](CHANGELOG.md): release notes.
+
+Useful contributions include Linux/SSH testing, clearer first-run interactions, converter fixtures and reproducible bug reports. **Never post subscription URLs, tokens, raw native configurations or private backups in an issue.**
+
+## Built with—and inspired by
+
+[sing-box](https://github.com/SagerNet/sing-box) provides the proxy engine; [Ratatui](https://github.com/ratatui/ratatui) and [Crossterm](https://github.com/crossterm-rs/crossterm) provide the terminal foundation. [Lazygit](https://github.com/jesseduffield/lazygit), [fzf](https://github.com/junegunn/fzf) and [bat](https://github.com/sharkdp/bat) inspired the focus on discoverable terminal workflows and concise documentation. These projects do not sponsor or endorse sing.
+
+## License
+
+sing is licensed under [MIT](LICENSE). sing-box is a separate project with its [own license](https://github.com/SagerNet/sing-box/blob/main/LICENSE); third-party dependencies retain their respective licenses.

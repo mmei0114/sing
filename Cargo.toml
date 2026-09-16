@@ -2,8 +2,12 @@
 name = "sing"
 version = "0.6.0"
 edition = "2021"
-description = "A terminal client for sing-box on macOS and Linux"
+description = "A native sing-box TUI for subscriptions, proxy groups, routing and DNS"
 license = "MIT"
+repository = "https://github.com/mmei0114/sing"
+readme = "README.md"
+keywords = ["sing-box", "tui", "proxy", "terminal", "ratatui"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1"

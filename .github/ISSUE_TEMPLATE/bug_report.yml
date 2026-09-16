@@ -1,0 +1,39 @@
+name: Bug report / 问题反馈
+description: Report a reproducible problem using fictional or redacted data.
+body:
+  - type: markdown
+    attributes:
+      value: "Do not post subscription URLs, tokens, raw configurations or private logs. For vulnerabilities, use the Security tab. English / 中文均可。"
+  - type: input
+    id: versions
+    attributes:
+      label: sing and sing-box versions
+      description: Include sing --version and the core version shown in Settings.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/version, architecture, terminal/size, local or SSH, capture mode.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Prefer demo data or fictional .invalid/.test hosts. What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Optional error text or demo screenshot. Inspect it manually before submitting.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed private URLs, credentials, raw configurations and sensitive network data.
+          required: true

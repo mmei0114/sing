@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="682" viewBox="0 0 1120 682" role="img" aria-labelledby="title desc">
+<title id="title">sing 0.6.0 — real terminal preview</title>
+<desc id="desc">The Overview screen rendered by sing --preview. Fictional stopped demo with no live traffic. Five workspaces, import and setup actions, core and capture status, and Review Changes.</desc>
+<rect width="1120" height="682" rx="14" fill="#0f1724"/>
+<path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1b2738"/>
+<circle cx="25" cy="21" r="5" fill="#fa7d86"/><circle cx="43" cy="21" r="5" fill="#f2cc72"/><circle cx="61" cy="21" r="5" fill="#78dba9"/>
+<text x="560" y="26" text-anchor="middle" fill="#b4c4dc" font-size="13" font-family="monospace">sing · fictional demo · 110 × 30</text>
+<g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16"><text x="24" y="74" fill="#dbe3f0" xml:space="preserve"> sing  localhost · STOPPED · Ports / no takeover · rule · DEMO</text>
+<text x="24" y="94" fill="#97baff" xml:space="preserve">[Start] [Rule / Global / Direct] [Settings] [Help] [Actions]</text>
+<text x="24" y="114" fill="#8ce4d1" xml:space="preserve"> 1 Overview  2 Proxies  3 Routing  4 Network  5 Activity</text>
+<text x="24" y="134" fill="#97baff" xml:space="preserve">[Import Subscription] [Connection Setup] [Change Proxy] [Capture] [Test Connection]</text>
+<text x="24" y="154" fill="#dbe3f0" xml:space="preserve">┌ Overview ──────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text x="24" y="174" fill="#dbe3f0" xml:space="preserve">│Core  sing-box 1.14.0                                                                                       │</text>
+<text x="24" y="194" fill="#dbe3f0" xml:space="preserve">│Routing  rule                                                                                               │</text>
+<text x="24" y="214" fill="#dbe3f0" xml:space="preserve">│System proxy  Off                                                                                           │</text>
+<text x="24" y="234" fill="#dbe3f0" xml:space="preserve">│TUN  Off                                                                                                    │</text>
+<text x="24" y="254" fill="#dbe3f0" xml:space="preserve">│Internet check  not_checked                                                                                 │</text>
+<text x="24" y="274" fill="#dbe3f0" xml:space="preserve">│Traffic  ↑ 0 B/s  ↓ 0 B/s                                                                                   │</text>
+<text x="24" y="294" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="314" fill="#dbe3f0" xml:space="preserve">│› proxy → Tokyo                                                                                             │</text>
+<text x="24" y="334" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="354" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="374" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="394" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="414" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="434" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="454" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="474" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="494" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="514" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="534" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="554" fill="#dbe3f0" xml:space="preserve">│                                                                                                            │</text>
+<text x="24" y="574" fill="#dbe3f0" xml:space="preserve">└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text x="24" y="594" fill="#dbe3f0" xml:space="preserve"></text>
+<text x="24" y="614" fill="#dbe3f0" xml:space="preserve"></text>
+<text x="24" y="634" fill="#97baff" xml:space="preserve">No pending configuration changes   [Review Changes]</text>
+<text x="24" y="654" fill="#97baff" xml:space="preserve"> Tab Focus  Enter Open  / Search  ? Help  q Quit</text></g>
+</svg>

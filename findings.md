@@ -1,5 +1,13 @@
 # 设计依据
 
+## 2026-09-16 — 公开发布与 README
+
+- GitHub API 实际登录身份为 mmei0114（沙箱内 gh auth status 的失败不能当作真实鉴权结论）；既有三个仓库不受影响，sing 名称经读取确认未占用。用户确认新仓库 sing / MIT。Cargo 原已有 MIT 元数据，本次补齐许可全文。
+- 参考 LazyGit（价值定位/实际工作流）、fzf（快速安装/使用）、bat（直观效果/功能分层）的官方 README；不复制文案或宣称背书。GitHub 官方 topics 文档用于仓库分类；自然关键词与双语介绍提高可发现性，不承诺收录或排名。
+- 初步全历史审计覆盖 4 commits、77 个唯一 blobs：未见高置信度 token/私钥/JWT/云凭据模式和运行状态敏感路径；fixtures 使用虚构域名/凭据。模式扫描不构成无泄漏保证，继续人工核对来源和待发布文件。
+- 文档读者审查发现首次 Proxy Ports 端口交接、Apply 与 Start、私有目录、恢复入口及离线内核安装说明不足，已依据实现补足；未扩展对真实接管恢复的验证承诺。
+- 文档来源：https://github.com/jesseduffield/lazygit/blob/master/README.md 、https://github.com/junegunn/fzf/blob/master/README.md 、https://github.com/sharkdp/bat/blob/master/README.md 、https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics 。
+
 ## 2026-09-16 — 0.6.0 发布收尾
 
 - 原生 Source/SRS 的导入是保留 local/remote 引用并绑定路由，不是第三方规则转换；未知规则数明确显示为未知，核心负责加载和远程更新。客户端不应为“统一导入”破坏原生更新语义。
