@@ -10,8 +10,9 @@
 - API-confirmed live group selection, separate selection memory and default-aware Apply recovery.
 - Error details, preserved input, stale-preview recovery and safer credential redaction.
 - Public English/Chinese documentation, MIT license, contribution/security guidance and macOS/Linux CI configuration.
+- Linux strict-build fix: compile macOS-only proxy transactions/watchdog only for the supported production platform or portable tests; retain `-D warnings`.
 
-Local verification: 122 ordinary tests and 9 explicit isolated/read-only tests passed with sing-box 1.14.0 on macOS arm64. CI build/test results are separate from real System Proxy/TUN, Linux/SSH networking and first-time user acceptance, which remain incomplete. See the [full record](docs/acceptance-0.6.0.md).
+Local verification: 122 ordinary tests and 9 explicit isolated/read-only tests passed with sing-box 1.14.0 on macOS arm64. [Public macOS/Linux CI](https://github.com/mmei0114/sing/actions/runs/35065643935) also passed. Build/test results are separate from real System Proxy/TUN, Linux/SSH networking and first-time user acceptance, which remain incomplete. See the [full record](docs/acceptance-0.6.0.md).
 
 ### Upgrading
 

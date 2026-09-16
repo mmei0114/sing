@@ -4,6 +4,10 @@ Date: 2026-09-16. Build host: macOS / arm64. Test core: sing-box 1.14.0.
 
 This is a runnable release of the product-workspace upgrade, not certification of every platform or completion of the full usability goal. No real subscriptions, active manager, system proxy settings or TUN routes were changed during development.
 
+### Public-source CI addendum
+
+The first public CI exposed Linux-only unused macOS backend code. Commit `02bc6b9` isolates that backend to macOS production builds while retaining portable transaction tests on every platform; strict warnings remain enabled. [GitHub Actions run 35065643935](https://github.com/mmei0114/sing/actions/runs/35065643935) then passed on both `ubuntu-latest` and `macos-latest`: formatting, ordinary tests, Clippy, optimized build, version/preview execution and local documentation links. This adds Linux build/test evidence, **not** Linux/SSH host-network or privileged takeover acceptance. The public release is source-only; no signed/notarized binaries or bundled core are advertised.
+
 ## Verified
 
 - 122 ordinary tests passed. The ordinary run reports 5 ignored unit tests and 6 ignored integration tests; those are not counted as ordinary passes.
@@ -38,7 +42,7 @@ Commands use the existing workspace dependency cache (`CARGO_HOME=.build/cargo` 
 | A14 | Passed (scoped) | Failed Apply rollback, stale revision rejection, source errors, preserved inputs and preview re-preparation. Real host takeover recovery remains outside this evidence. |
 | A15 | Partial | Multiple-size rendering and large-list/focus regressions; representative 80×24 PTY flows. Not every task has been manually repeated at every size. |
 | A16 | Passed (scoped) | Keyboard navigation, text input isolation, mouse-free PTY and synthetic SSH scope/choice tests. No real remote SSH session. |
-| A17 | Partial | Local tests/lint/release and isolated core checks passed. No Linux build or real Linux/macOS takeover acceptance. |
+| A17 | Partial | Local tests/lint/release and isolated core checks passed; public macOS/Linux build/test CI also passed (see addendum). Real Linux/macOS takeover acceptance remains incomplete. |
 | A18 | Not tested | User still needs to perform the real tasks without chat guidance. |
 
 ## Remaining limitations
@@ -47,13 +51,13 @@ Commands use the existing workspace dependency cache (`CARGO_HOME=.build/cargo` 
 - Native remote Source/SRS imports retain references rather than fetching/converting them in sing. Content validity and initial reachability are determined by the core on Check/Apply/Start; remote download/update behavior was not verified against a public provider here.
 - References currently cover recognized native namespaces, not client-only Global target settings. If a deleted group was only that target, select a new Global target before applying Global mode; effective-config validation rejects missing targets. Unknown future native fields cannot be universally reference-checked or classified as secrets.
 - Native cache ownership prevents sing from restoring its own remembered choice. The core's own cache persistence is not certified by the unit test of that precedence decision.
-- Real authorization, System Proxy/TUN failure recovery, Linux packaging/build and SSH network behavior need dedicated host-specific acceptance. Switching capture while connected can interrupt networking; do not test casually over a critical SSH session.
+- Real authorization, System Proxy/TUN failure recovery, Linux package distribution and SSH network behavior need dedicated host-specific acceptance. Linux source build/test CI passed; it does not validate host networking. Switching capture while connected can interrupt networking; do not test casually over a critical SSH session.
 - Full-profile import assistance, subscription scheduling, dynamic member policies, DNS/path timing tools and hardened autostart are outside this release. Native JSON retains advanced configuration access; this is not equivalent to a dedicated form for every feature.
 
 ## Delivery and rollback material
 
 Run `./sing` from the repository after following the README upgrade steps. The launcher uses `target/release/sing` (0.6.0); manager protocol is 9. Development did not stop the old manager. The user must choose when to shut it down, which interrupts its connection.
 
-Delivered macOS arm64 executable SHA-256: `f219104212fe5a51061bbda5b95685044e3283cc2c2dfe64133e5c6bb0544a79`.
+Local macOS arm64 executable rebuilt after the public-source portability fix, SHA-256: `cfb36465b557e7263d6d15607a89212daad73b70df8950122e95f69d97d2b07f`. This local artifact is not uploaded as a public binary distribution.
 
 The previous executable is retained at `.build/backups/v0.5.1-f70AYn2u/sing` and still reports 0.5.1. SHA-256: `7604898e50ac68b76cda54fedddd0255df7d5efc24eef11c28bacc19ca0ef00a`. Source baseline: `b476cdb`. Binaries, private state and credentials are not included in Git. A binary backup is not a private-data rollback plan; preserve compatible state separately before attempting a downgrade.

@@ -2,6 +2,9 @@
 
 ## 2026-09-16 — GitHub 首次公开发布准备
 
+- 收尾验收：CI 35065643935（代码提交 02bc6b9）macOS/Linux 全绿，均完成 fmt、普通测试、Clippy -D warnings、release、version/preview 和本地文档链接验证。本地复跑 122 普通 / 9 隔离只读测试通过；新版本地二进制仍为 0.6.0，SHA-256 cfb36465b557e7263d6d15607a89212daad73b70df8950122e95f69d97d2b07f；重新生成 SVG 与已发布内容完全一致。
+- 独立新读者再次复核 README/手册后未见阻塞理解的问题。最终文档仅补 CI 证据与发行记录，不再更改受验代码；v0.6.0 采用源码公开预览发布，标签与 Release 以 GitHub 记录为准。真实网络接管、Linux/SSH 和无指导用户任务仍未全部验收，不改变长期产品目标状态。搜索排名和自然流量不作保证，未向第三方社区投递广告。
+
 - 源码与文档已推送 main（680982e），GitHub 公开页、MIT 识别、14 个 topics 和私密漏洞报告 enabled 已读取确认。首个远端 CI（35046449449）macOS 通过；Linux 普通测试通过，但 Clippy 揭示 macOS 专用事务/Watchdog 在 Linux 生产构建中未使用。
 - 发布前修复将事务实现拆入 cfg(macos 或 test) 的 controller 模块，保留所有平台的模拟事务测试；增加 port 生命周期断言，Watchdog 同样按平台/测试编译，不关闭 -D warnings。同时 checkout 升级固定 v6 SHA，消除 Node 20 退役提醒。第二轮远端结果待核对。
 
