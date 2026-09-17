@@ -2,7 +2,7 @@
 use super::{
     editor, labels,
     modal::{self, Choice, Picker, TextArea},
-    notify, text, theme, App,
+    notify, text, theme, App, Tab,
 };
 use crate::{config as redact, native, runtime::Action};
 use crossterm::event::{KeyCode as K, KeyEvent};
@@ -112,6 +112,85 @@ pub struct State {
     selected: [usize; 16],
 }
 
+const MODULES: [(&str, &str, &str, usize); 13] = [
+    (
+        "core",
+        "Core",
+        "Version, location and official downloads",
+        0,
+    ),
+    ("log", "log", "Logging level and output", 1),
+    ("dns", "dns", "Servers, rules and resolver options", 2),
+    ("ntp", "ntp", "Time synchronization", 5),
+    (
+        "certificate",
+        "certificate",
+        "Trust stores and certificates",
+        6,
+    ),
+    ("endpoints", "endpoints", "Bidirectional protocols", 7),
+    ("inbounds", "inbounds", "Proxy listeners and TUN", 8),
+    (
+        "outbounds",
+        "outbounds",
+        "Nodes, groups and direct connections",
+        9,
+    ),
+    ("route", "route", "Rules, rule sets and routing options", 10),
+    (
+        "services",
+        "services",
+        "Core services and management API",
+        13,
+    ),
+    (
+        "experimental",
+        "experimental",
+        "Cache and experimental APIs",
+        14,
+    ),
+    (
+        "json",
+        "Full JSON",
+        "Every native field; nothing discarded",
+        15,
+    ),
+    (
+        "capture",
+        "System proxy",
+        "Application integration, outside native config",
+        0,
+    ),
+];
+
+pub fn open_menu(app: &mut App) {
+    let choices = MODULES
+        .iter()
+        .map(|(id, name, detail, _)| Choice::new(*id, *name, *detail))
+        .collect();
+    app.push(Picker::single("Config · choose a module", choices, "", Box::new(|app, picked| {
+        let Some(id) = picked.first() else { return };
+                if id == "capture" {
+                    if app.snap.system_proxy.pending_restore && (!app.snap.system_proxy.configured || !app.snap.system_proxy.helper_ready || !app.snap.connected) {
+                        return app.push(modal::Confirm::new("Restore system proxy", "Restore the original system proxy settings recorded by sing? The core will not be stopped. Administrator authorization may be requested.", "Restore", Box::new(|app| app.request_busy(Action::RestoreProxy, "Restoring", Box::new(notify)))));
+                    }
+            return app.push(modal::Confirm::new("System proxy", "Change macOS system proxy integration? Applications that ignore system settings are unaffected. This does not edit the native sing-box configuration.", if app.system_proxy_on() { "Turn off" } else { "Turn on" }, Box::new(super::chrome::toggle_system_proxy)));
+        }
+        if let Some((_, _, _, index)) = MODULES.iter().find(|m| m.0 == id) {
+            app.config.section = *index;
+            app.go(Tab::Config);
+        }
+    })));
+}
+
+fn siblings(s: Section) -> &'static [usize] {
+    match s {
+        Section::DnsServers | Section::DnsRules | Section::DnsOptions => &[2, 3, 4],
+        Section::RouteRules | Section::RouteOptions | Section::RuleSets => &[10, 12, 11],
+        _ => &[],
+    }
+}
+
 pub fn entered(app: &mut App) {
     if app.cores.is_none() {
         app.request(
@@ -195,11 +274,22 @@ pub fn key(app: &mut App, k: KeyEvent) {
     };
     let selected = app.config.selected[app.config.section];
     match k.code {
-        K::Char(']') | K::Right => {
-            app.config.section = (app.config.section + 1) % Section::ALL.len()
+        K::Esc => app.go(app.last_tab),
+        K::Char(']') | K::Right if !siblings(s).is_empty() => {
+            let siblings = siblings(s);
+            let at = siblings
+                .iter()
+                .position(|i| *i == app.config.section)
+                .unwrap_or(0);
+            app.config.section = siblings[(at + 1) % siblings.len()];
         }
-        K::Char('[') | K::Left => {
-            app.config.section = (app.config.section + Section::ALL.len() - 1) % Section::ALL.len()
+        K::Char('[') | K::Left if !siblings(s).is_empty() => {
+            let siblings = siblings(s);
+            let at = siblings
+                .iter()
+                .position(|i| *i == app.config.section)
+                .unwrap_or(0);
+            app.config.section = siblings[(at + siblings.len() - 1) % siblings.len()];
         }
         K::Down | K::Char('j') => {
             app.config.selected[app.config.section] = (selected + 1).min(n.saturating_sub(1))
@@ -329,52 +419,30 @@ fn open_json(app: &mut App) {
 }
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let wide = area.width >= 88;
-    if wide {
-        let [nav, _, body] = Layout::horizontal([
-            Constraint::Length(23),
-            Constraint::Length(2),
-            Constraint::Min(20),
-        ])
-        .areas(area);
-        draw_nav(f, nav, app, true);
-        draw_body(f, body, app);
+    let area = area.inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+    let s = section(app);
+    let mut spans = vec![Span::styled("Config / ", theme::s(theme::dim()))];
+    if siblings(s).is_empty() {
+        spans.push(Span::styled(s.label(), theme::bold(theme::accent())));
     } else {
-        let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
-        draw_nav(f, nav, app, false);
-        draw_body(f, body, app);
+        for i in siblings(s) {
+            spans.push(Span::styled(
+                format!("{}   ", Section::ALL[*i].label()),
+                if *i == app.config.section {
+                    theme::bold(theme::accent())
+                } else {
+                    theme::s(theme::dim())
+                },
+            ));
+        }
+        spans.push(Span::styled("[/]", theme::key()));
     }
-}
-fn draw_nav(f: &mut Frame, area: Rect, app: &App, vertical: bool) {
-    if vertical {
-        let lines: Vec<Line> = Section::ALL
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                modal::row(
-                    i == app.config.section,
-                    vec![Span::styled(
-                        s.label(),
-                        if i == app.config.section {
-                            theme::bold(theme::accent())
-                        } else {
-                            theme::s(theme::dim())
-                        },
-                    )],
-                )
-            })
-            .collect();
-        f.render_widget(Paragraph::new(lines), area);
-    } else {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" ‹ ", theme::key()),
-                Span::styled(section(app).label(), theme::bold(theme::text())),
-                Span::styled(" ›  follows sing-box config", theme::s(theme::faint())),
-            ])),
-            area,
-        );
-    }
+    f.render_widget(Paragraph::new(Line::from(spans)), nav);
+    draw_body(f, body, app);
 }
 fn draw_body(f: &mut Frame, area: Rect, app: &App) {
     let s = section(app);
@@ -393,7 +461,12 @@ fn draw_body(f: &mut Frame, area: Rect, app: &App) {
             .unwrap_or(Value::Null);
         let pretty =
             serde_json::to_string_pretty(&redact::redacted(&value)).unwrap_or_else(|_| "{}".into());
-        f.render_widget(Paragraph::new(format!("{}\n\n{}\n\nEnter edits common fields; a reveals every documented field; e inside the editor opens this object's JSON.", s.label(), pretty)).style(theme::s(theme::text())).wrap(Wrap { trim: false }), area);
+        f.render_widget(
+            Paragraph::new(pretty)
+                .style(theme::s(theme::dim()))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
     let rows = items(app, s);
@@ -426,10 +499,6 @@ fn draw_body(f: &mut Frame, area: Rect, app: &App) {
             ],
         ));
     }
-    lines.push(Line::styled(
-        "Enter edit · n new · x remove · changes remain a draft",
-        theme::s(theme::faint()),
-    ));
     f.render_widget(Paragraph::new(lines), area);
 }
 fn draw_core(f: &mut Frame, area: Rect, app: &App) {
@@ -491,13 +560,12 @@ fn draw_core(f: &mut Frame, area: Rect, app: &App) {
 pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     match section(app) {
         Section::Core => vec![
-            ("[/]", "section"),
             ("↑↓", "core"),
             ("enter", "select"),
             ("r", "rescan"),
             ("d", "releases"),
             ("i", "install"),
-            (",", "back"),
+            ("esc", "back"),
         ],
         s if s.list() => vec![
             ("[/]", "section"),
@@ -505,9 +573,9 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("enter", "edit"),
             ("n", "new"),
             ("x", "remove"),
-            (",", "back"),
+            ("esc", "back"),
         ],
-        _ => vec![("[/]", "section"), ("enter", "edit"), (",", "back")],
+        _ => vec![("enter", "edit"), (":", "modules"), ("esc", "back")],
     }
 }
 

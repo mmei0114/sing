@@ -10,6 +10,7 @@ use serde_json::json;
 
 pub struct Demo {
     store: model::Store,
+    applied_native: Option<serde_json::Value>,
     connected: bool,
     started_at: u64,
     clock: u64,
@@ -84,6 +85,7 @@ impl Demo {
         rules.push(json!({"process_name":["Mail"],"action":"route","outbound":"direct"}));
         Ok(Self {
             store,
+            applied_native: None,
             connected: false,
             started_at: 0,
             clock: model::now(),
@@ -101,6 +103,7 @@ impl Demo {
     }
     fn start(&mut self) {
         self.connected = true;
+        self.applied_native = self.store.native.clone();
         self.started_at = model::now();
         self.groups = api::Groups {
             group: native::array(self.store.native.as_ref().unwrap(), "/outbounds")
@@ -139,7 +142,7 @@ impl Demo {
             system_proxy: Default::default(),
             connectivity: Default::default(),
             running_tun: false,
-            dirty: false,
+            dirty: self.applied_native != self.store.native,
             store,
             connected: self.connected,
             api_ready: self.connected,
@@ -187,7 +190,7 @@ impl Demo {
             self.next_id += 1;
             let target = self.route(app_name, host);
             let chain = match self.groups.group.iter().find(|g| g.tag == target) {
-                Some(g) => vec![target.clone(), g.selected.clone()],
+                Some(g) => vec![g.selected.clone(), target.clone()],
                 None => vec![target.clone()],
             };
             let ip = host.parse::<std::net::IpAddr>().is_ok();
@@ -205,7 +208,7 @@ impl Demo {
                 uplink_total: 800,
                 downlink_total: 4_000,
                 rule: format!("demo => route({target})"),
-                outbound: chain.last().cloned().unwrap_or_default(),
+                outbound: chain.first().cloned().unwrap_or_default(),
                 outbound_type: "trojan".into(),
                 chain,
                 process: Some(api::ProcessInfo {

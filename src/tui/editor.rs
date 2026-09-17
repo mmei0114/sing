@@ -694,7 +694,11 @@ impl Modal for Editor {
         }
     }
     fn draw(&self, f: &mut Frame, area: Rect, app: &App) {
-        let r = modal::popup(area, 104, area.height);
+        let r = modal::popup(
+            area,
+            96,
+            (self.rows().len() as u16 + 7).max(10).min(area.height),
+        );
         let path = match &self.target {
             Target::Native { pointer, .. } => pointer.trim_start_matches('/').replace('/', " › "),
             Target::Group { .. } => "outbounds".into(),

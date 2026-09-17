@@ -31,6 +31,92 @@ impl Drop for Daemon {
 }
 
 #[test]
+#[ignore = "Isolated Unix socket regression; no core or network changes"]
+fn manager_accepts_fragmented_request_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_sing"))
+        .args(["--daemon", "--data-dir"])
+        .arg(dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut daemon = Daemon {
+        dir: dir.path().into(),
+        child,
+    };
+    for _ in 0..100 {
+        if UnixStream::connect(dir.path().join("manager.sock")).is_ok() {
+            break;
+        }
+        assert!(daemon.child.try_wait().unwrap().is_none());
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    // On macOS accepted sockets inherit O_NONBLOCK from the listener. A
+    // short idle period/partial frame must not be mistaken for client EOF.
+    for delay_before_write in [false, true] {
+        let mut s = UnixStream::connect(dir.path().join("manager.sock")).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        if delay_before_write {
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        s.write_all(b"{\"action\":").unwrap();
+        std::thread::sleep(Duration::from_millis(120));
+        s.write_all(b"\"snapshot\"}\n").unwrap();
+        let mut line = String::new();
+        BufReader::new(s).read_line(&mut line).unwrap();
+        let reply: Value =
+            serde_json::from_str(&line).expect("complete response to fragmented request");
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["snapshot"]["connected"], false);
+    }
+    // Activity's `f` saves a native route edit before offering Apply. Exercise
+    // that sequence in the isolated profile; never start a core for this test.
+    let migration = rpc(dir.path(), json!({"action":"review_migration"}));
+    assert_eq!(migration["ok"], true, "{migration}");
+    let adopted = rpc(dir.path(), migration["confirm"].clone());
+    assert_eq!(adopted["ok"], true, "{adopted}");
+    let read_route = json!({"action":"read_native","data":"/route"});
+    let initial = rpc(dir.path(), read_route.clone());
+    assert_eq!(initial["ok"], true);
+    let mut edit = initial["edit"].clone();
+    edit["value"]["find_process"] = json!(false);
+    assert_eq!(
+        rpc(dir.path(), json!({"action":"write_native","data":edit}))["ok"],
+        true
+    );
+    let mut edit = rpc(dir.path(), read_route.clone())["edit"].clone();
+    edit["value"]["find_process"] = json!(true);
+    assert_eq!(
+        rpc(dir.path(), json!({"action":"write_native","data":edit}))["ok"],
+        true
+    );
+    assert_eq!(
+        rpc(dir.path(), read_route)["edit"]["value"]["find_process"],
+        true
+    );
+    assert_eq!(
+        rpc(dir.path(), json!({"action":"snapshot"}))["snapshot"]["connected"],
+        false
+    );
+    // Also use the production client transport, not only the test RPC helper.
+    let status = Command::new(env!("CARGO_BIN_EXE_sing"))
+        .args(["--status", "--data-dir"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["ok"], true);
+    assert_eq!(status["snapshot"]["connected"], false);
+}
+
+#[test]
 #[ignore = "Requires loopback socket access and SING_TEST_CORE"]
 fn subscription_http_preview_persistence_and_background_core() {
     let core = std::env::var("SING_TEST_CORE").expect("Set SING_TEST_CORE");

@@ -128,6 +128,7 @@ pub struct Confirm {
     yes: String,
     danger: bool,
     focus: usize,
+    scroll: u16,
     on_yes: Option<Act>,
 }
 impl Confirm {
@@ -138,6 +139,7 @@ impl Confirm {
             yes: yes.into(),
             danger: false,
             focus: 0,
+            scroll: 0,
             on_yes: Some(on_yes),
         }
     }
@@ -151,6 +153,20 @@ impl Modal for Confirm {
     any!();
     fn key(&mut self, app: &mut App, k: KeyEvent) -> Outcome {
         match k.code {
+            K::Down | K::Char('j') => {
+                self.scroll = self
+                    .scroll
+                    .saturating_add(1)
+                    .min(textwrap_height(&self.body, 20) as u16)
+            }
+            K::Up | K::Char('k') => self.scroll = self.scroll.saturating_sub(1),
+            K::PageDown => {
+                self.scroll = self
+                    .scroll
+                    .saturating_add(6)
+                    .min(textwrap_height(&self.body, 20) as u16)
+            }
+            K::PageUp => self.scroll = self.scroll.saturating_sub(6),
             K::Left | K::Right | K::Tab | K::BackTab => self.focus = 1 - self.focus,
             K::Char('y') => {
                 (self.on_yes.take().unwrap())(app);
@@ -178,6 +194,7 @@ impl Modal for Confirm {
         f.render_widget(
             Paragraph::new(self.body.clone())
                 .style(theme::s(theme::text()))
+                .scroll((self.scroll, 0))
                 .wrap(Wrap { trim: false }),
             body,
         );
@@ -190,7 +207,12 @@ impl Modal for Confirm {
         }
     }
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("←→", "choose"), ("enter", "confirm"), ("esc", "cancel")]
+        vec![
+            ("↑↓", "scroll"),
+            ("←→", "choose"),
+            ("enter", "confirm"),
+            ("esc", "cancel"),
+        ]
     }
 }
 pub fn textwrap_height(s: &str, w: usize) -> usize {
@@ -374,7 +396,7 @@ impl Modal for Picker {
     }
     fn draw(&self, f: &mut Frame, area: Rect, _: &App) {
         let visible = self.visible();
-        let h = (visible.len() as u16 + 5).clamp(8, area.height);
+        let h = (visible.len() as u16 + 5).max(8).min(area.height);
         let r = popup(area, 72, h);
         let right = if self.multi {
             format!("{} chosen", self.chosen.len())
@@ -415,7 +437,12 @@ impl Modal for Picker {
                 } else {
                     "  "
                 };
-                let label_w = (w.saturating_sub(4)).min(34.max(w.saturating_sub(4) / 2));
+                let longest = visible
+                    .iter()
+                    .map(|c| text::width(&c.label))
+                    .max()
+                    .unwrap_or(0);
+                let label_w = (longest + 2).max(16).min(w.saturating_sub(4) * 3 / 5);
                 row(
                     i == self.selected,
                     vec![

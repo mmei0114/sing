@@ -302,7 +302,7 @@ fn generate_effective(store: &Store) -> Result<Value> {
         "log":{"level":"warn","timestamp":true},
         "dns":{"servers":[{"type":"local","tag":"bootstrap"},{"type":"https","tag":"secure-dns","server":s.dns,"server_port":443,"path":"/dns-query","detour":s.routing}],"final":"secure-dns","strategy":s.dns_strategy},
         "inbounds":inbounds,"outbounds":outbounds,
-        "route":{"rules":rules,"rule_set":sets,"final":s.routing,"auto_detect_interface":true,"default_domain_resolver":"bootstrap"},
+        "route":{"rules":rules,"rule_set":sets,"final":s.routing,"auto_detect_interface":true,"find_process":true,"default_domain_resolver":"bootstrap"},
         "services":[{"type":"api","tag":"management","listen":"127.0.0.1","listen_port":s.api_port,"secret":store.secret}]
     });
     // Direct dialing is represented by the absence of a detour. A detour to

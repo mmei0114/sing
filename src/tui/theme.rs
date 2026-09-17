@@ -55,6 +55,9 @@ pub fn selection() -> Color {
 pub fn panel() -> Color {
     c(pick((24, 30, 38), 234))
 }
+pub fn background() -> Color {
+    c(pick((15, 23, 34), 233))
+}
 
 pub fn s(fg: Color) -> Style {
     Style::default().fg(fg)

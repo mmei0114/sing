@@ -270,15 +270,20 @@ pub struct ConnectionReport {
 }
 
 pub fn request(dir: &Path, action: Action) -> Result<Reply> {
+    let mut frame = serde_json::to_vec(&action).context("Could not encode manager request")?;
+    frame.push(b'\n');
     let mut stream = UnixStream::connect(dir.join("manager.sock"))
-        .context("Manager not running. Open sing first.")?;
+        .context("Could not connect to manager. Check that sing is running.")?;
     stream.set_read_timeout(Some(Duration::from_secs(180)))?;
-    serde_json::to_writer(&mut stream, &action)?;
-    stream.write_all(b"\n")?;
+    stream.set_write_timeout(Some(Duration::from_secs(180)))?;
+    stream
+        .write_all(&frame)
+        .context("Could not send request to manager")?;
     let mut line = String::new();
     BufReader::new(stream)
         .take(16 * 1024 * 1024)
-        .read_line(&mut line)?;
+        .read_line(&mut line)
+        .context("Could not read manager response; check state before retrying changes")?;
     serde_json::from_str(&line).context("Manager returned an invalid response")
 }
 
@@ -2059,8 +2064,18 @@ pub fn daemon(dir: &Path) -> Result<()> {
             }
             Err(e) => return Err(e.into()),
         };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+        // macOS inherits O_NONBLOCK from the listener. Framed reads below
+        // must wait for the complete request, including across partial writes.
+        if stream.set_nonblocking(false).is_err()
+            || stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .is_err()
+            || stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .is_err()
+        {
+            continue;
+        }
         let mut line = String::new();
         if BufReader::new(&stream)
             .take(10 * 1024 * 1024)
@@ -2099,8 +2114,9 @@ pub fn daemon(dir: &Path) -> Result<()> {
             }
             Err(_) => Reply::error(anyhow::anyhow!("Invalid request")),
         };
-        if serde_json::to_writer(&mut stream, &reply).is_ok() {
-            let _ = stream.write_all(b"\n");
+        if let Ok(mut frame) = serde_json::to_vec(&reply) {
+            frame.push(b'\n');
+            let _ = stream.write_all(&frame);
         }
         if shutdown && reply.ok {
             break;

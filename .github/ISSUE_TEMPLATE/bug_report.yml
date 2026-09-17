@@ -1,14 +1,14 @@
-name: Bug report / 问题反馈
+name: Bug report
 description: Report a reproducible problem using fictional or redacted data.
 body:
   - type: markdown
     attributes:
-      value: "Do not post subscription URLs, tokens, raw configurations or private logs. For vulnerabilities, use the Security tab. English / 中文均可。"
+      value: "Do not post subscription URLs, tokens, raw configurations or private logs. For vulnerabilities, use private reporting in the Security tab."
   - type: input
     id: versions
     attributes:
       label: sing and sing-box versions
-      description: Include sing --version and the core version shown in Settings.
+      description: Include sing --version and the core version shown in Config → Core.
     validations:
       required: true
   - type: input

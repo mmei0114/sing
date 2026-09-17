@@ -11,6 +11,7 @@ mod demo;
 mod editor;
 mod flows;
 mod history;
+mod identity;
 mod input;
 mod labels;
 mod modal;
@@ -93,6 +94,8 @@ pub struct App {
     pub logs: Vec<String>,
     pub cores: Option<CoreReport>,
     pub poll_error: String,
+    pub snapshot_at: Instant,
+    pending_connections: Option<runtime::ConnectionReport>,
     outbox: VecDeque<(Action, Then, Option<String>)>,
     pub(crate) pending_auth: Option<(String, Action)>,
 }
@@ -127,6 +130,8 @@ impl App {
             logs: vec![],
             cores: None,
             poll_error: String::new(),
+            snapshot_at: Instant::now(),
+            pending_connections: None,
             outbox: VecDeque::new(),
             pending_auth: None,
         }
@@ -195,7 +200,7 @@ impl App {
             self.observe(s);
         }
         if let Some(c) = reply.connections.take() {
-            self.history.observe(c, self.snap.connected);
+            self.observe_connections(c);
         }
         if let Some(c) = reply.cores.take() {
             self.cores = Some(c);
@@ -213,7 +218,16 @@ impl App {
         then(self, reply);
     }
     pub fn observe(&mut self, s: Snapshot) {
-        if s.connected && s.api_ready {
+        self.snapshot_at = Instant::now();
+        if !s.connected {
+            self.activity.paused = false;
+            self.pending_connections = None;
+            self.history.total_live = 0;
+            for e in &mut self.history.entries {
+                e.open = false;
+            }
+        }
+        if s.connected && s.api_ready && s.status.traffic_available {
             self.traffic.push_back((s.status.downlink, s.status.uplink));
             while self.traffic.len() > 240 {
                 self.traffic.pop_front();
@@ -222,6 +236,20 @@ impl App {
             self.traffic.clear();
         }
         self.snap = s;
+    }
+    fn observe_connections(&mut self, report: runtime::ConnectionReport) {
+        if self.activity.paused {
+            self.pending_connections = Some(report);
+        } else {
+            self.history.observe(report, self.snap.connected);
+        }
+    }
+    pub fn resume_activity(&mut self) {
+        self.activity.paused = false;
+        if let Some(report) = self.pending_connections.take() {
+            self.history.observe(report, self.snap.connected);
+        }
+        self.activity.selected = [0; 3];
     }
     fn receive_poll(&mut self, r: Result<Reply>) {
         match r {
@@ -232,7 +260,7 @@ impl App {
                 if r.ok {
                     self.poll_error.clear();
                     if let Some(c) = r.connections.take() {
-                        self.history.observe(c, self.snap.connected);
+                        self.observe_connections(c);
                     }
                     if let Some(text) = r.config.take() {
                         self.logs = text.lines().rev().take(2000).map(str::to_string).collect();
@@ -313,6 +341,7 @@ impl App {
     }
     pub fn go(&mut self, tab: Tab) {
         if tab != self.tab {
+            self.resume_activity();
             if self.tab != Tab::Config {
                 self.last_tab = self.tab;
             }
@@ -328,13 +357,7 @@ impl App {
             K::Char('1') => self.go(Tab::Overview),
             K::Char('2') => self.go(Tab::Proxies),
             K::Char('3') => self.go(Tab::Activity),
-            K::Char(',') => {
-                if self.tab == Tab::Config {
-                    self.go(self.last_tab)
-                } else {
-                    self.go(Tab::Config)
-                }
-            }
+            K::Char(':') | K::Char(',') => config::open_menu(self),
             K::Char('?') => self.push(flows::help(self)),
             K::Char('s') => chrome::start_stop(self),
             K::Char('m') => self.push(chrome::ModeMenu::new(self)),
@@ -350,6 +373,14 @@ impl App {
 // ---- drawing -----------------------------------------------------------------
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    f.render_widget(
+        ratatui::widgets::Block::default().style(
+            ratatui::style::Style::default()
+                .bg(theme::background())
+                .fg(theme::text()),
+        ),
+        area,
+    );
     let [header, body, hints, controls] = chrome::layout(area);
     chrome::header(f, header, app);
     match app.tab {

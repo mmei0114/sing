@@ -1,4 +1,4 @@
-name: Feature request / 功能建议
+name: Feature request
 description: Describe the task you want to accomplish, not just a new setting.
 body:
   - type: textarea

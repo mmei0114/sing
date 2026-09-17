@@ -1,32 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="722" viewBox="0 0 1120 722" role="img" aria-labelledby="title desc">
-<title id="title">sing 0.6.1-dev — real terminal preview</title>
+<title id="title">sing 0.6.3-dev — real terminal preview</title>
 <desc id="desc">The Overview layout rendered by sing --preview, with simplified documentation colors. Fictional running demo with no real traffic. Three workspaces, live evidence, proxy groups, and fixed Start, Mode and TUN controls.</desc>
 <rect width="1120" height="722" rx="14" fill="#0f1724"/>
 <path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1b2738"/>
 <circle cx="25" cy="21" r="5" fill="#fa7d86"/><circle cx="43" cy="21" r="5" fill="#f2cc72"/><circle cx="61" cy="21" r="5" fill="#78dba9"/>
 <text x="560" y="26" text-anchor="middle" fill="#b4c4dc" font-size="13" font-family="monospace">sing · fictional demo · 110 × 32</text>
-<g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16"><text x="24" y="74" fill="#8797a9" xml:space="preserve"> ◆ sing   1 Overview   2 Policies   3 Activity                     ● Running 1h 15m   ↓ 361 KB/s  ↑ 19.5 KB/s</text>
+<g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16"><text x="24" y="74" fill="#8797a9" xml:space="preserve"> ◆ sing   1 Overview   2 Policies   3 Activity                                               ● Running 1h 15m</text>
 <text x="24" y="94" fill="#72d8bf" xml:space="preserve">──────────━━━━━━━━━━──────────────────────────────────────────────────────────────────────────────────────────</text>
 <text x="24" y="114" fill="#dae2e9" xml:space="preserve"></text>
-<text x="24" y="134" fill="#dae2e9" xml:space="preserve"> STATUS ────────────────────────────────────      PROXY GROUPS ─────────────────────────────────────── live</text>
-<text x="24" y="154" fill="#dae2e9" xml:space="preserve">           ● Running  for 1h 15m                  ▌Proxy              Manual  Tokyo 01              60 ms</text>
-<text x="24" y="174" fill="#dae2e9" xml:space="preserve"> Mode      Rule  6 rules, else Proxy               Streaming          Auto    Singapore             60 ms</text>
-<text x="24" y="194" fill="#dae2e9" xml:space="preserve"> Capture   127.0.0.1:2080</text>
-<text x="24" y="214" fill="#dae2e9" xml:space="preserve"> Check     Not checked  v to check</text>
-<text x="24" y="234" fill="#dae2e9" xml:space="preserve"> Core      sing-box 1.14.0</text>
-<text x="24" y="254" fill="#dae2e9" xml:space="preserve">                                                  TOP APPS ───────────────────────────────────── 3 Activity</text>
-<text x="24" y="274" fill="#dae2e9" xml:space="preserve">                                                   Google Chrome    ▮▮▮▮▮▮▮▮▮▮▮▮▮▮    5.6 MB  Streaming</text>
-<text x="24" y="294" fill="#dae2e9" xml:space="preserve"> TRAFFIC ─────────── ↓ 361 KB/s   ↑ 19.5 KB/s      Safari           ▮▮▮▮▮▮▮▮▮▮▯▯▯▯    4.0 MB  Proxy</text>
-<text x="24" y="314" fill="#dae2e9" xml:space="preserve">                                                   Code             ▮▮▮▮▮▮▮▮▮▯▯▯▯▯    3.5 MB  Proxy</text>
-<text x="24" y="334" fill="#dae2e9" xml:space="preserve"> ▁██▁             ▁██▁                             curl             ▮▮▮▮▮▮▯▯▯▯▯▯▯▯    2.4 MB  Proxy</text>
-<text x="24" y="354" fill="#dae2e9" xml:space="preserve"> ████▃           ▃████▃                            Music            ▮▮▮▮▮▮▯▯▯▯▯▯▯▯    2.2 MB  Proxy</text>
-<text x="24" y="374" fill="#dae2e9" xml:space="preserve"> █████▄         ▄██████▄                           Spotify          ▮▮▮▮▮▮▯▯▯▯▯▯▯▯    2.1 MB  Streaming</text>
-<text x="24" y="394" fill="#dae2e9" xml:space="preserve"> ██████▆       ▆████████▆                          Slack            ▮▮▮▮▮▯▯▯▯▯▯▯▯▯    2.0 MB  Proxy</text>
-<text x="24" y="414" fill="#dae2e9" xml:space="preserve"> ███████▇▁   ▁▇██████████▇▁   ▁                    Telegram         ▮▮▮▮▮▯▯▯▯▯▯▯▯▯    1.7 MB  Proxy</text>
-<text x="24" y="434" fill="#dae2e9" xml:space="preserve"> █████████▂ ▂██████████████▂ ▂█                    Mail             ▮▮▮▮▮▯▯▯▯▯▯▯▯▯    1.6 MB  Direct</text>
-<text x="24" y="454" fill="#dae2e9" xml:space="preserve"> ██████████▄████████████████▄██                    WeChat           ▮▮▮▮▯▯▯▯▯▯▯▯▯▯    1.5 MB  Direct</text>
-<text x="24" y="474" fill="#dae2e9" xml:space="preserve"> ██████████████████████████████</text>
-<text x="24" y="494" fill="#dae2e9" xml:space="preserve"> Session  ↓ 16.6 MB  ↑ 844 KB · 60 conns</text>
+<text x="24" y="134" fill="#dae2e9" xml:space="preserve">  Capture    Proxy ports · apps must opt in</text>
+<text x="24" y="154" fill="#dae2e9" xml:space="preserve">  Traffic    ↓ 825 KB/s   ↑ 39.1 KB/s</text>
+<text x="24" y="174" fill="#dae2e9" xml:space="preserve">  Last check Not checked · v to test</text>
+<text x="24" y="194" fill="#dae2e9" xml:space="preserve"></text>
+<text x="24" y="214" fill="#dae2e9" xml:space="preserve">  Proxy groups ───────────────────────────── live   Connections ───────────────────────────────── c Activity</text>
+<text x="24" y="234" fill="#dae2e9" xml:space="preserve">  ▌Proxy       → Tokyo 01                   60 ms   DESTINATION               POLICY → NODE</text>
+<text x="24" y="254" fill="#dae2e9" xml:space="preserve">   Streaming   → Singapore                  60 ms    weixin.qq.com            Direct</text>
+<text x="24" y="274" fill="#dae2e9" xml:space="preserve">                                                     news.ycombinator.com     Proxy → Tokyo 01</text>
+<text x="24" y="294" fill="#dae2e9" xml:space="preserve">  Traffic ──────────────────── sampled / combined    example.com              Proxy → Tokyo 01</text>
+<text x="24" y="314" fill="#dae2e9" xml:space="preserve">             ▃▅██▅▃           ▃▅                     marketplace.visualstud…  Proxy → Tokyo 01</text>
+<text x="24" y="334" fill="#dae2e9" xml:space="preserve">  █▆▃▁   ▁▃▆████████▆▃▁   ▁▃▆███                     update.code.visualstud…  Proxy → Tokyo 01</text>
+<text x="24" y="354" fill="#dae2e9" xml:space="preserve">  ████▇▄▇██████████████▇▄▇██████                     www.apple.com            Proxy → Tokyo 01</text>
+<text x="24" y="374" fill="#dae2e9" xml:space="preserve">  Session  ↓ 15.6 MB   ↑ 801 KB                      spclient.wg.spotify.com  Streaming → Singapore</text>
+<text x="24" y="394" fill="#dae2e9" xml:space="preserve">                                                     wss-primary.slack.com    Proxy → Tokyo 01</text>
+<text x="24" y="414" fill="#dae2e9" xml:space="preserve">                                                    8 observed · sample just now</text>
+<text x="24" y="434" fill="#dae2e9" xml:space="preserve"></text>
+<text x="24" y="454" fill="#dae2e9" xml:space="preserve"></text>
+<text x="24" y="474" fill="#dae2e9" xml:space="preserve"></text>
+<text x="24" y="494" fill="#dae2e9" xml:space="preserve"></text>
 <text x="24" y="514" fill="#dae2e9" xml:space="preserve"></text>
 <text x="24" y="534" fill="#dae2e9" xml:space="preserve"></text>
 <text x="24" y="554" fill="#dae2e9" xml:space="preserve"></text>
@@ -35,6 +35,6 @@
 <text x="24" y="614" fill="#dae2e9" xml:space="preserve"></text>
 <text x="24" y="634" fill="#dae2e9" xml:space="preserve"></text>
 <text x="24" y="654" fill="#8797a9" xml:space="preserve"></text>
-<text x="24" y="674" fill="#dae2e9" xml:space="preserve"> ↑↓ group   enter choose proxy   l test latency   v check connection   i import   p system proxy</text>
-<text x="24" y="694" fill="#72d8bf" xml:space="preserve"> ● s Stop │ m Mode Rule │ t TUN Off                                                         , Config │ ? Help</text></g>
+<text x="24" y="674" fill="#dae2e9" xml:space="preserve"> ↑↓ group   enter select   tab connections   l latency   v check</text>
+<text x="24" y="694" fill="#72d8bf" xml:space="preserve"> ● s Stop │ m Mode Rule │ t TUN Off                                                         : Config │ ? Help</text></g>
 </svg>

@@ -65,6 +65,13 @@ pub fn ago(seconds: u64) -> String {
         _ => format!("{}d", seconds / 86400),
     }
 }
+pub fn age(seconds: u64) -> String {
+    if seconds < 5 {
+        "just now".into()
+    } else {
+        format!("{} ago", ago(seconds))
+    }
+}
 pub fn duration(seconds: u64) -> String {
     let (h, m) = (seconds / 3600, (seconds % 3600) / 60);
     if h > 0 {

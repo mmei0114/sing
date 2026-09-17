@@ -1,8 +1,8 @@
 [package]
 name = "sing"
-version = "0.6.1-dev"
+version = "0.6.3-dev"
 edition = "2021"
-description = "A native sing-box TUI for subscriptions, proxy groups, routing and DNS"
+description = "A terminal network proxy powered by sing-box: rule-based routing, proxy groups and connection activity"
 license = "MIT"
 repository = "https://github.com/mmei0114/sing"
 readme = "README.md"

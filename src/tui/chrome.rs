@@ -92,7 +92,11 @@ pub fn header(f: &mut Frame, area: Rect, app: &App) {
                 theme::s(theme::dim()),
             ));
         }
-        if s.api_ready && s.status.traffic_available {
+        if app.tab != Tab::Overview
+            && s.api_ready
+            && s.status.traffic_available
+            && app.snapshot_at.elapsed().as_secs() < 6
+        {
             status.push(Span::styled(
                 format!(
                     "   ↓ {}  ↑ {} ",
@@ -117,9 +121,19 @@ pub fn header(f: &mut Frame, area: Rect, app: &App) {
 
 pub fn hint_line(f: &mut Frame, area: Rect, app: &App, hints: &[(&str, &str)]) {
     let mut spans = vec![Span::raw(" ")];
+    let mut used = 1;
     for (k, label) in hints {
+        let gap = if area.width < 80 { 1 } else { 3 };
+        let needed = text::width(k) + text::width(label) + 1 + gap;
+        if used + needed > area.width as usize {
+            break;
+        }
+        used += needed;
         spans.push(Span::styled(k.to_string(), theme::key()));
-        spans.push(Span::styled(format!(" {label}   "), theme::s(theme::dim())));
+        spans.push(Span::styled(
+            format!(" {label}{}", " ".repeat(gap)),
+            theme::s(theme::dim()),
+        ));
     }
     let hint_width: usize = spans.iter().map(|s| text::width(&s.content)).sum();
     if let Some(t) = &app.toast {
@@ -165,6 +179,17 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
     let settings = &s.store.settings;
     let bar = Style::default().bg(theme::panel());
     f.render_widget(Paragraph::new("").style(bar), area);
+    if !app.modals.is_empty()
+        || (app.tab == Tab::Activity && super::activity::capturing(app))
+        || (app.tab == Tab::Proxies && super::proxies::capturing(app))
+    {
+        f.render_widget(
+            Paragraph::new(" Global shortcuts paused · finish or cancel to return")
+                .style(bar.fg(theme::dim())),
+            area,
+        );
+        return;
+    }
     let mode = match settings.route_mode.as_str() {
         "global" => "Global",
         "direct" => "Direct",
@@ -185,7 +210,7 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
         },
         Segment {
             key: "m",
-            label: "Mode",
+            label: if area.width < 72 { "" } else { "Mode" },
             value: mode.into(),
             color: theme::accent(),
         },
@@ -237,7 +262,11 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
             theme::dim()
         };
         spans.push(Span::styled(
-            format!(" {label}"),
+            if label.is_empty() {
+                String::new()
+            } else {
+                format!(" {label}")
+            },
             Style::default().fg(label_color).bg(theme::panel()),
         ));
         if !seg.value.is_empty() {
@@ -275,7 +304,7 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
     }
     let config_on = app.tab == Tab::Config;
     right.push(Span::styled(
-        ",",
+        ":",
         Style::default()
             .fg(theme::accent())
             .bg(theme::panel())
@@ -362,12 +391,6 @@ pub fn start_stop(app: &mut App) {
     }
     if app.snap.core.is_empty() {
         app.error("No sing-box core found. Open Config (,) → Core to download one.");
-        return;
-    }
-    if app.snap.store.nodes.is_empty()
-        && super::labels::targets(&app.snap.store, app.doc(), false).len() <= 2
-    {
-        app.error("Add a subscription first: 2 Proxies & Rules → Subscriptions → i Import.");
         return;
     }
     // Starting is not destructive; skip the review and apply the current draft.

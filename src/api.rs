@@ -377,20 +377,23 @@ mod tests {
         let (api_port, proxy_port) = (free(), free());
         let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let target_port = target.local_addr().unwrap().port();
+        let (release, hold) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
-            for s in target.incoming().flatten() {
-                use std::io::Write;
-                let mut s = s;
-                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            use std::io::{Read, Write};
+            if let Ok((mut s, _)) = target.accept() {
+                let mut buf = [0; 4096];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n");
+                let _ = hold.recv_timeout(Duration::from_secs(15));
             }
         });
         let config = json!({
             "log":{"level":"warn"},
             "inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":proxy_port}],
-            "outbounds":[{"type":"direct","tag":"direct"},{"type":"block","tag":"blocked"}],
+            "outbounds":[{"type":"direct","tag":"direct"},{"type":"selector","tag":"inner","outbounds":["direct"]},{"type":"selector","tag":"proxy","outbounds":["inner"]}],
             "route":{"find_process":true,"rules":[
                 {"clash_mode":"direct","action":"route","outbound":"direct"},
-                {"clash_mode":"global","action":"route","outbound":"blocked"}],"final":"direct"},
+                {"clash_mode":"global","action":"route","outbound":"direct"}],"final":"proxy"},
             "services":[{"type":"api","tag":"management","listen":"127.0.0.1","listen_port":api_port,"secret":"s"}],
             "experimental":{"clash_api":{"default_mode":"rule"}}
         });
@@ -417,29 +420,43 @@ mod tests {
             }
             let mut api = api.expect("api");
             let status = api.mode_status().await?;
-            eprintln!("modes {:?} current {}", status.modes, status.current);
+            anyhow::ensure!(!status.modes.is_empty(), "No modes exposed");
             api.set_mode("direct".into()).await?;
-            eprintln!("after set: {}", api.mode_status().await?.current);
+            anyhow::ensure!(api.mode_status().await?.current == "direct");
+            api.set_mode("rule".into()).await?;
             let client = reqwest::Client::builder()
                 .proxy(reqwest::Proxy::all(format!(
                     "http://127.0.0.1:{proxy_port}"
                 ))?)
                 .build()?;
-            let _ = client
+            let _response = client
                 .get(format!("http://127.0.0.1:{target_port}/"))
                 .send()
-                .await;
+                .await?;
             let cs = api.connections().await?;
-            for c in &cs {
-                eprintln!(
-                    "conn {} rule={} out={} process={:?}",
-                    c.destination, c.rule, c.outbound, c.process
-                );
-            }
+            let c = cs
+                .iter()
+                .find(|c| c.destination.ends_with(&format!(":{target_port}")))
+                .context("Test connection missing from core snapshot")?;
+            anyhow::ensure!(
+                c.chain == ["direct", "inner", "proxy"],
+                "Unexpected core chain: {:?}",
+                c.chain
+            );
+            let p = c
+                .process
+                .as_ref()
+                .context("Core did not identify the local test process")?;
+            anyhow::ensure!(!p.path.is_empty(), "Core reported no executable path");
+            anyhow::ensure!(
+                p.pid == 0 || p.pid == std::process::id(),
+                "Core reported a different socket owner"
+            );
             anyhow::Ok(())
         });
         let _ = child.kill();
         let _ = child.wait();
+        drop(release);
         result.unwrap();
     }
 }

@@ -5,3 +5,13 @@
 /.local-data/
 *.log
 .DS_Store
+
+# Private working notes and agent state are not product documentation.
+/AGENTS.md
+/.agents/
+/.codex/
+/findings.md
+/progress.md
+/task_plan.md
+/docs/product-*.md
+/docs/acceptance-*.md

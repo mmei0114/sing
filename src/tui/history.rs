@@ -47,11 +47,7 @@ pub fn port(c: &api::Connection) -> String {
         .unwrap_or_default()
 }
 pub fn app_name(c: &api::Connection) -> String {
-    c.process
-        .as_ref()
-        .map(|p| crate::model::clean(p.name()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_default()
+    super::identity::display(c)
 }
 
 #[derive(Default)]
@@ -64,6 +60,7 @@ pub struct History {
 
 #[derive(Clone, Debug, Default)]
 pub struct AppStat {
+    pub key: String,
     pub name: String,
     pub path: String,
     pub connections: usize,
@@ -133,7 +130,9 @@ impl History {
         let mut map: BTreeMap<String, AppStat> = BTreeMap::new();
         for e in &self.entries {
             let name = e.app();
-            let stat = map.entry(name.clone()).or_insert_with(|| AppStat {
+            let key = super::identity::key(&e.c);
+            let stat = map.entry(key.clone()).or_insert_with(|| AppStat {
+                key,
                 name: name.clone(),
                 path: e
                     .c
@@ -157,7 +156,7 @@ impl History {
         for e in self
             .entries
             .iter()
-            .filter(|e| app.is_none_or(|a| e.app() == a))
+            .filter(|e| app.is_none_or(|a| super::identity::key(&e.c) == a))
         {
             let host = e.host();
             let stat = map.entry(host.clone()).or_insert_with(|| HostStat {
@@ -169,11 +168,7 @@ impl History {
             stat.traffic += e.total();
             if e.created() >= stat.last {
                 stat.last = e.created();
-                stat.target =
-                    e.c.chain
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| e.c.outbound.clone());
+                stat.target = route_target(&e.c);
                 stat.rule = e.c.rule.clone();
                 stat.sample = Some(e.c.clone());
             }
@@ -186,9 +181,26 @@ impl History {
 /// The outbound the matched rule chose (a group comes before its member).
 pub fn route_target(c: &api::Connection) -> String {
     c.chain
-        .first()
+        .last()
         .cloned()
         .unwrap_or_else(|| c.outbound.clone())
+}
+
+pub fn route_path(c: &api::Connection, label: impl Fn(&str) -> String) -> String {
+    if c.chain.is_empty() {
+        if c.outbound.is_empty() {
+            "Not reported".into()
+        } else {
+            label(&c.outbound)
+        }
+    } else {
+        c.chain
+            .iter()
+            .rev()
+            .map(|t| label(t))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    }
 }
 
 #[cfg(test)]
@@ -239,7 +251,7 @@ mod tests {
         let apps = h.apps();
         let safari = apps.iter().find(|a| a.name == "Safari").unwrap();
         assert_eq!((safari.connections, safari.open, safari.down), (2, 0, 180));
-        assert_eq!(h.hosts(Some("Safari")).len(), 2);
+        assert_eq!(h.hosts(Some(&safari.key)).len(), 2);
         assert_eq!(
             h.hosts(None)
                 .iter()
@@ -256,5 +268,36 @@ mod tests {
         assert_eq!(host(&c), "2001:db8::1");
         c.destination = "192.0.2.1:80".into();
         assert_eq!(host(&c), "192.0.2.1");
+    }
+    #[test]
+    fn chain_is_reversed_for_policy_to_node_display() {
+        let c = api::Connection {
+            chain: vec!["node".into(), "HK".into(), "proxy".into()],
+            outbound: "node".into(),
+            ..Default::default()
+        };
+        assert_eq!(route_target(&c), "proxy");
+        assert_eq!(route_path(&c, str::to_string), "proxy → HK → node");
+    }
+    #[test]
+    fn same_name_in_different_paths_does_not_merge_rule_evidence() {
+        let a = conn("a", "Browser", "a.example", 10, true);
+        let mut b = a.clone();
+        b.id = "b".into();
+        b.process.as_mut().unwrap().path = "/tmp/Browser".into();
+        let mut h = History::default();
+        h.observe(
+            ConnectionReport {
+                observed_at: 1,
+                total: 2,
+                items: vec![a, b],
+            },
+            true,
+        );
+        let apps = h.apps();
+        assert_eq!(apps.len(), 2);
+        for app in &apps {
+            assert_eq!(h.hosts(Some(&app.key))[0].connections, 1);
+        }
     }
 }

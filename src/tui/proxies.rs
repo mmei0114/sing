@@ -221,6 +221,10 @@ fn tabs(app: &App) -> Line<'static> {
 }
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
+    let area = area.inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
     let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
     f.render_widget(Paragraph::new(tabs(app)), nav);
     match app.proxies.section {

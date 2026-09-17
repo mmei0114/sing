@@ -61,13 +61,16 @@ pub fn help(_: &App) -> TextView {
          2 Policies      proxy groups, ordered rules and sources\n\
          3 Activity      connections, observed apps and logs\n\n\
          Always available\n\
-         s Start / Stop   m Mode   t TUN   , Config   A Review & Apply\n\n\
+         s Start / Stop   m Mode   t TUN   : Config   A Review & Apply\n\n\
          Lists\n\
          ↑↓ or j/k move   Enter opens   [/] changes section\n\
          n new   e edit   x remove   J/K reorder where available\n\n\
          Activity\n\
-         s toggles time / traffic sort. r turns a selected connection or app into a draft rule.\n\
+         o sorts by recency / traffic. / filters. r creates or extends a local rule.\n\
+         Browsing pauses observations; Space resumes. f configures process discovery.\n\
          App names come from connections observed by sing-box; they are not a system-wide process inventory.\n\n\
+         Overview: Tab switches groups / connections; c opens Activity; v checks HTTPS.\n\
+         p toggles local macOS system proxy. q exits the UI, leaving the core running.\n\n\
          Saving changes the draft. A reviews and applies it. The running core is not changed while browsing or editing.",
     )
 }
@@ -239,17 +242,10 @@ pub fn import_rule_set(app: &mut App) {
 
 pub fn connection_details(app: &App, c: &crate::api::Connection) -> TextView {
     let process = c.process.as_ref();
-    let chain = if c.chain.is_empty() {
-        app.label(&c.outbound)
-    } else {
-        c.chain
-            .iter()
-            .map(|t| app.label(t))
-            .collect::<Vec<_>>()
-            .join(" → ")
-    };
-    let target = c.chain.first().map(String::as_str).unwrap_or(&c.outbound);
-    let body = vec![
+    let chain = super::history::route_path(c, |t| app.label(t));
+    let target = super::history::route_target(c);
+    let name = super::identity::display(c);
+    let mut body = vec![
         Line::from(vec![
             Span::styled("Destination  ", theme::s(theme::dim())),
             Span::raw(if c.domain.is_empty() {
@@ -260,29 +256,29 @@ pub fn connection_details(app: &App, c: &crate::api::Connection) -> TextView {
         ]),
         Line::from(vec![
             Span::styled("Application  ", theme::s(theme::dim())),
-            Span::raw(
-                process
-                    .map(|p| p.name())
-                    .unwrap_or("Unavailable")
-                    .to_string(),
-            ),
+            Span::raw(if name.is_empty() {
+                super::identity::missing_label(app).into()
+            } else {
+                name
+            }),
         ]),
         Line::from(vec![
             Span::styled("Process path ", theme::s(theme::dim())),
             Span::raw(
                 process
                     .map(|p| p.path.clone())
-                    .unwrap_or_else(|| "Unavailable".into()),
+                    .filter(|p| !p.is_empty())
+                    .unwrap_or_else(|| "Not reported by core".into()),
             ),
         ]),
         Line::from(vec![
             Span::styled("Route        ", theme::s(theme::dim())),
-            Span::styled(chain, theme::s(theme::target(target))),
+            Span::styled(chain, theme::s(theme::target(&target))),
         ]),
         Line::from(vec![
             Span::styled("Matched rule ", theme::s(theme::dim())),
             Span::raw(if c.rule.is_empty() {
-                "Unavailable".into()
+                "No matched rule reported".into()
             } else {
                 c.rule.clone()
             }),
@@ -305,6 +301,21 @@ pub fn connection_details(app: &App, c: &crate::api::Connection) -> TextView {
             )),
         ]),
     ];
+    if let Some(p) = process.filter(|p| p.pid > 0) {
+        body.push(Line::raw(format!("Process ID   {}", p.pid)));
+    }
+    if process.is_none_or(|p| p.path.is_empty()) {
+        body.push(Line::raw(""));
+        body.push(Line::styled(
+            super::identity::explanation(app),
+            theme::s(theme::warn()),
+        ));
+    }
+    body.push(Line::raw(""));
+    body.push(Line::styled(
+        "Domain / IP evidence only; HTTPS URL paths are not inspected.",
+        theme::s(theme::dim()),
+    ));
     TextView {
         title: "Connection evidence".into(),
         body,
