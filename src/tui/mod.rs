@@ -89,13 +89,12 @@ pub struct App {
     pub activity: activity::State,
     pub config: config::State,
     pub history: history::History,
-    /// Recent (downlink, uplink) rates for the traffic sparkline.
-    pub traffic: VecDeque<(i64, i64)>,
     pub logs: Vec<String>,
     pub cores: Option<CoreReport>,
     pub poll_error: String,
     pub snapshot_at: Instant,
-    pending_connections: Option<runtime::ConnectionReport>,
+    // Freeze only the reading surface, never the incoming observation history.
+    frozen_history: Option<history::History>,
     outbox: VecDeque<(Action, Then, Option<String>)>,
     pub(crate) pending_auth: Option<(String, Action)>,
 }
@@ -126,12 +125,11 @@ impl App {
             activity: Default::default(),
             config: Default::default(),
             history: Default::default(),
-            traffic: VecDeque::new(),
             logs: vec![],
             cores: None,
             poll_error: String::new(),
             snapshot_at: Instant::now(),
-            pending_connections: None,
+            frozen_history: None,
             outbox: VecDeque::new(),
             pending_auth: None,
         }
@@ -221,34 +219,29 @@ impl App {
         self.snapshot_at = Instant::now();
         if !s.connected {
             self.activity.paused = false;
-            self.pending_connections = None;
+            self.frozen_history = None;
             self.history.total_live = 0;
             for e in &mut self.history.entries {
                 e.open = false;
             }
         }
-        if s.connected && s.api_ready && s.status.traffic_available {
-            self.traffic.push_back((s.status.downlink, s.status.uplink));
-            while self.traffic.len() > 240 {
-                self.traffic.pop_front();
-            }
-        } else if !s.connected {
-            self.traffic.clear();
-        }
         self.snap = s;
     }
     fn observe_connections(&mut self, report: runtime::ConnectionReport) {
-        if self.activity.paused {
-            self.pending_connections = Some(report);
-        } else {
-            self.history.observe(report, self.snap.connected);
+        self.history.observe(report, self.snap.connected);
+    }
+    pub fn observation_view(&self) -> &history::History {
+        self.frozen_history.as_ref().unwrap_or(&self.history)
+    }
+    pub fn pause_activity(&mut self) {
+        if !self.activity.paused {
+            self.frozen_history = Some(self.history.clone());
+            self.activity.paused = true;
         }
     }
     pub fn resume_activity(&mut self) {
         self.activity.paused = false;
-        if let Some(report) = self.pending_connections.take() {
-            self.history.observe(report, self.snap.connected);
-        }
+        self.frozen_history = None;
         self.activity.selected = [0; 3];
     }
     fn receive_poll(&mut self, r: Result<Reply>) {
@@ -356,7 +349,7 @@ impl App {
             K::Char('q') => self.quit = true,
             K::Char('1') => self.go(Tab::Overview),
             K::Char('2') => self.go(Tab::Proxies),
-            K::Char('3') => self.go(Tab::Activity),
+            K::Char('3') => activity::open_all(self),
             K::Char(':') | K::Char(',') => config::open_menu(self),
             K::Char('?') => self.push(flows::help(self)),
             K::Char('s') => chrome::start_stop(self),

@@ -53,6 +53,17 @@ pub struct State {
     pub selected: [usize; 3],
     pub sort: Sort,
     pub app_filter: Option<String>,
+    pub show_details: bool,
+}
+
+/// A top-level visit means all connections, not a previous app drill-down.
+pub fn open_all(app: &mut App) {
+    app.go(super::Tab::Activity);
+    app.resume_activity();
+    app.activity.section = Section::Requests;
+    app.activity.app_filter = None;
+    app.activity.query.clear();
+    app.activity.search = None;
 }
 
 pub fn capturing(app: &App) -> bool {
@@ -61,7 +72,7 @@ pub fn capturing(app: &App) -> bool {
 
 fn connections(app: &App) -> Vec<&history::Entry> {
     let mut rows: Vec<_> = app
-        .history
+        .observation_view()
         .entries
         .iter()
         .filter(|e| {
@@ -91,7 +102,7 @@ fn connections(app: &App) -> Vec<&history::Entry> {
 }
 
 fn apps(app: &App) -> Vec<history::AppStat> {
-    let mut rows = app.history.apps();
+    let mut rows = app.observation_view().apps();
     rows.retain(|a| {
         format!("{} {}", a.name, a.path)
             .to_lowercase()
@@ -114,7 +125,7 @@ fn selected_app_sample(app: &App) -> Option<crate::api::Connection> {
     let row = apps(app)
         .get(app.activity.selected[Section::Apps.index()])?
         .clone();
-    app.history
+    app.observation_view()
         .entries
         .iter()
         .filter(|e| identity::key(&e.c) == row.key)
@@ -149,14 +160,14 @@ pub fn key(app: &mut App, k: KeyEvent) {
             K::Down | K::Up | K::PageDown | K::PageUp | K::Enter | K::Char('j' | 'k' | 'r' | 'x')
         )
     {
-        app.activity.paused = true;
+        app.pause_activity();
     }
     let index = app.activity.section.index();
     let n = row_count(app);
     match k.code {
         K::Char('/') if app.activity.section != Section::Logs => {
             app.activity.search = Some(super::input::Input::new(app.activity.query.clone()));
-            app.activity.paused = true;
+            app.pause_activity();
         }
         K::Esc if !app.activity.query.is_empty() => {
             app.activity.query.clear();
@@ -166,15 +177,17 @@ pub fn key(app: &mut App, k: KeyEvent) {
             if app.activity.paused {
                 app.resume_activity();
             } else {
-                app.activity.paused = true;
+                app.pause_activity();
             }
         }
         K::Char(']') | K::Right => {
             app.activity.section = Section::ALL[(index + 1) % Section::ALL.len()];
+            app.activity.app_filter = None;
         }
         K::Char('[') | K::Left => {
             app.activity.section =
                 Section::ALL[(index + Section::ALL.len() - 1) % Section::ALL.len()];
+            app.activity.app_filter = None;
         }
         K::Down | K::Char('j') => {
             app.activity.selected[index] =
@@ -212,6 +225,7 @@ pub fn key(app: &mut App, k: KeyEvent) {
             if app.activity.section == Section::Requests && app.activity.app_filter.is_some() =>
         {
             app.activity.app_filter = None;
+            app.activity.section = Section::Apps;
         }
         K::Char('r') if app.activity.section == Section::Requests => {
             if let Some(c) = selected_connection(app) {
@@ -222,6 +236,9 @@ pub fn key(app: &mut App, k: KeyEvent) {
             if let Some(c) = selected_app_sample(app) {
                 quick_rule::from_connection(app, c, true);
             }
+        }
+        K::Char('d') if app.activity.section == Section::Requests => {
+            app.activity.show_details = !app.activity.show_details;
         }
         K::Char('f') if app.activity.section != Section::Logs => {
             quick_rule::enable_process_discovery(app)
@@ -260,65 +277,97 @@ pub fn paste(app: &mut App, s: &str) {
     }
 }
 
-fn tabs(app: &App, width: u16) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
+fn tabs(app: &App) -> Line<'static> {
+    let mut spans = Vec::new();
     for s in Section::ALL {
         let on = s == app.activity.section;
         spans.push(Span::styled(
-            format!(" {} ", s.name()),
+            format!("{}   ", s.name()),
             if on {
                 theme::bold(theme::accent())
             } else {
                 theme::s(theme::dim())
             },
         ));
-        spans.push(Span::raw("  "));
     }
-    spans.push(Span::styled("[/]", theme::key()));
-    let suffix = match &app.activity.app_filter {
-        Some(name) => format!(
-            "App: {} · Esc clears",
-            app.history
+    spans.push(Span::styled("← →", theme::s(theme::dim())));
+    Line::from(spans)
+}
+
+fn scope(app: &App, width: usize) -> String {
+    match &app.activity.app_filter {
+        Some(key) => {
+            let name = app
+                .observation_view()
                 .apps()
-                .iter()
-                .find(|a| a.key == *name)
-                .map(|a| a.name.as_str())
-                .unwrap_or("Unattributed")
-        ),
-        None if app.activity.section != Section::Logs => {
-            format!(
-                "{} · {}",
-                if app.activity.paused {
-                    "Paused · Space live"
-                } else {
-                    "Live"
-                },
-                app.activity.sort.label()
-            )
-        }
-        None => String::new(),
-    };
-    let used: usize = spans.iter().map(|s| text::width(&s.content)).sum();
-    if used + text::width(&suffix) + 1 < width as usize {
-        spans.push(Span::styled(
+                .into_iter()
+                .find(|a| a.key == *key)
+                .map(|a| a.name)
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "Unattributed".into());
+            let suffix = " · Esc back";
             format!(
                 "{}{}",
-                " ".repeat(width as usize - used - text::width(&suffix) - 1),
+                text::fit(&name, width.saturating_sub(text::width(suffix))),
                 suffix
-            ),
-            theme::s(theme::faint()),
-        ));
+            )
+        }
+        None => match app.activity.section {
+            Section::Requests => "All connections".into(),
+            Section::Apps => "All observed apps".into(),
+            Section::Logs => "Core logs".into(),
+        },
     }
-    Line::from(spans)
 }
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let area = area.inner(ratatui::layout::Margin {
         horizontal: 2,
-        vertical: 1,
+        vertical: 0,
     });
-    let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
-    f.render_widget(Paragraph::new(tabs(app, nav.width)), nav);
+    let filtered = app.activity.search.is_some() || !app.activity.query.is_empty();
+    let [nav, body] = Layout::vertical([
+        Constraint::Length(if filtered { 3 } else { 2 }),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    f.render_widget(Paragraph::new(tabs(app)), nav);
+    let state = if app.activity.section == Section::Logs {
+        String::new()
+    } else if app.activity.paused {
+        "Held · Space live".into()
+    } else if !app.snap.connected {
+        "Stopped".into()
+    } else if !app.snap.api_ready
+        || app.snapshot_at.elapsed().as_secs() >= 6
+        || app.history.observed_at == 0
+    {
+        "Waiting for core".into()
+    } else {
+        format!("Live · {}", app.activity.sort.label())
+    };
+    let scope_width = (nav.width as usize).saturating_sub(text::width(&state) + 2);
+    let mut status = vec![Span::styled(
+        text::cell(&scope(app, scope_width), scope_width),
+        theme::s(theme::dim()),
+    )];
+    status.push(Span::raw("  "));
+    status.push(Span::styled(
+        state,
+        theme::s(if app.activity.paused {
+            theme::warn()
+        } else {
+            theme::dim()
+        }),
+    ));
+    f.render_widget(
+        Paragraph::new(Line::from(status)),
+        Rect {
+            y: nav.y + 1,
+            height: 1,
+            ..nav
+        },
+    );
     if let Some(input) = &app.activity.search {
         let mut spans = vec![Span::styled("/ ", theme::key())];
         spans.extend(
@@ -329,7 +378,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(
             Paragraph::new(Line::from(spans)),
             Rect {
-                y: nav.y + 1,
+                y: nav.y + 2,
                 height: 1,
                 ..nav
             },
@@ -339,7 +388,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
             Paragraph::new(format!("/ {} · Esc clears", app.activity.query))
                 .style(theme::s(theme::dim())),
             Rect {
-                y: nav.y + 1,
+                y: nav.y + 2,
                 height: 1,
                 ..nav
             },
@@ -360,14 +409,21 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
         } else if !app.activity.query.is_empty() {
             "No matching connections. Esc clears the filter."
         } else if app.activity.app_filter.is_some() {
-            "No observed connections for this app. Esc clears the filter."
+            "No observed connections for this app. Esc returns to Apps."
+        } else if app.activity.paused {
+            "View held. Space shows the latest observations."
         } else {
             "Waiting for connection evidence…"
         };
-        f.render_widget(Paragraph::new(format!("\n  {message}\n\n  Activity keeps a session history of what the core reports; it does not infer routes from the draft.")), area);
+        f.render_widget(
+            Paragraph::new(message)
+                .style(theme::s(theme::dim()))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
-    let wide = area.width >= 105;
+    let wide = app.activity.show_details && area.width >= 124;
     let (list, detail) = if wide {
         let [a, _, b] = Layout::horizontal([
             Constraint::Percentage(64),
@@ -383,10 +439,11 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
     let height = list.height.saturating_sub(2) as usize;
     let start = modal::scroll(selected, height, rows.len());
     let w = list.width as usize;
-    let app_w = (w / 5).clamp(8, 18);
-    let route_w = (w / 5).clamp(8, 16);
+    let app_w = (w / 5).clamp(8, 20);
+    let route_w = (w / 5).clamp(8, 24);
     let host_w = w.saturating_sub(app_w + route_w + 11);
     let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
         Span::styled(text::cell("APP", app_w), theme::s(theme::faint())),
         Span::styled(text::cell("DESTINATION", host_w), theme::s(theme::faint())),
         Span::styled(text::cell("ROUTE", route_w), theme::s(theme::faint())),
@@ -419,23 +476,20 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
             ],
         ));
     }
-    let age = crate::model::now().saturating_sub(app.history.observed_at);
+    let age = crate::model::now().saturating_sub(app.observation_view().observed_at);
     lines.push(Line::styled(
         format!(
-            "{} observed · {} · sample {}",
+            "{}–{} / {} observed · sample {}",
+            start + 1,
+            (start + height).min(rows.len()),
             rows.len(),
-            if app.activity.paused {
-                "Paused · Space live".into()
-            } else {
-                format!("{} live", app.history.total_live)
-            },
-            if app.history.observed_at == 0 {
+            if app.observation_view().observed_at == 0 {
                 "not available".into()
             } else {
                 text::age(age)
             }
         ),
-        theme::s(theme::faint()),
+        theme::s(theme::dim()),
     ));
     f.render_widget(Paragraph::new(lines), list);
     if let Some(detail) = detail {
@@ -447,11 +501,19 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
             &name
         };
         let body = format!(
-            "ROUTING EVIDENCE\n\n{}\n{}\n\nApp\n{}\n\nRule\n{}\n\nChain\n{}\n\nPress r to create an editable rule from this evidence.",
-            if c.domain.is_empty() { &c.destination } else { &c.domain },
+            "Connection\n\n{}\n{}\n\nApplication\n{}\n\nMatched rule\n{}\n\nRoute\n{}",
+            if c.domain.is_empty() {
+                &c.destination
+            } else {
+                &c.domain
+            },
             c.destination,
             process,
-            if c.rule.is_empty() { "No matched rule reported" } else { &c.rule },
+            if c.rule.is_empty() {
+                "No matched rule reported"
+            } else {
+                &c.rule
+            },
             history::route_path(c, |t| app.label(t))
         );
         f.render_widget(
@@ -495,6 +557,7 @@ fn draw_apps(f: &mut Frame, area: Rect, app: &App) {
     let name_w = (w / 3).clamp(10, 26);
     let path_w = w.saturating_sub(name_w + 18);
     let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
         Span::styled(text::cell("APPLICATION", name_w), theme::s(theme::faint())),
         Span::styled(text::cell("EXECUTABLE", path_w), theme::s(theme::faint())),
         Span::styled(text::right("OPEN", 6), theme::s(theme::dim())),
@@ -529,7 +592,7 @@ fn draw_apps(f: &mut Frame, area: Rect, app: &App) {
     }
     lines.push(Line::styled(
         if app.activity.paused {
-            "Paused · Space resumes live updates"
+            "View held · collection continues · Space live"
         } else if rows.iter().any(|a| a.key.is_empty()) {
             "Unattributed traffic · f explains app discovery"
         } else {
@@ -540,7 +603,7 @@ fn draw_apps(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), list);
     if let Some(detail) = detail {
         let current = &rows[selected];
-        let hosts = app.history.hosts(Some(&current.key));
+        let hosts = app.observation_view().hosts(Some(&current.key));
         let mut lines = vec![
             Line::styled("OBSERVED LINKS", theme::bold(theme::dim())),
             Line::styled(
@@ -627,6 +690,7 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("x", "close"),
             ("o", "sort"),
             ("f", "apps"),
+            ("d", "detail pane"),
         ],
         Section::Apps => vec![
             ("↑↓", "app"),
@@ -636,13 +700,56 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("o", "sort"),
             ("f", "find apps"),
         ],
-        Section::Logs => vec![("[/]", "section"), ("↑↓", "scroll"), ("c", "clear history")],
+        Section::Logs => vec![("↑↓", "scroll")],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_with_connections() -> App {
+        let demo = super::super::demo::Demo::running().unwrap();
+        let mut app = App::new(demo.snapshot(), None);
+        let process = crate::api::ProcessInfo {
+            path: "/Applications/A very long browser application name.app/Contents/MacOS/browser"
+                .into(),
+            ..Default::default()
+        };
+        for (id, process) in [("a", Some(process)), ("b", None), ("c", None)] {
+            app.history.entries.push(history::Entry {
+                c: crate::api::Connection {
+                    id: id.into(),
+                    process,
+                    ..Default::default()
+                },
+                open: id != "c",
+            });
+        }
+        app
+    }
+
+    #[test]
+    fn all_connections_includes_every_observed_live_and_closed_connection() {
+        let mut app = app_with_connections();
+        assert_eq!(connections(&app).len(), 3);
+        app.activity.app_filter = Some(identity::key(&app.history.entries[0].c));
+        assert_eq!(connections(&app).len(), 1);
+        open_all(&mut app);
+        assert_eq!(connections(&app).len(), 3);
+        assert_eq!(connections(&app).iter().filter(|e| e.open).count(), 2);
+    }
+
+    #[test]
+    fn narrow_app_scope_preserves_back_hint_for_long_names() {
+        let mut app = app_with_connections();
+        app.activity.app_filter = Some(identity::key(&app.history.entries[0].c));
+        let label = scope(&app, 32);
+        assert!(label.ends_with(" · Esc back"));
+        assert!(label.contains('…'));
+        assert_eq!(text::width(&label), 32);
+    }
+
     #[test]
     fn sections_are_the_three_user_tasks() {
         assert_eq!(

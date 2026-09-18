@@ -228,9 +228,22 @@ fn item_label(app: &App, s: Section, v: &Value, i: usize) -> (String, String) {
                 labels::action(v)
             };
             (
-                labels::matcher(&app.snap.store, v),
+                if s == Section::RouteRules {
+                    labels::route_matcher(&app.snap.store, v)
+                } else {
+                    let name = labels::matcher(&app.snap.store, v);
+                    if name == "everything" {
+                        "All queries".into()
+                    } else {
+                        name
+                    }
+                },
                 if t.is_empty() {
-                    a
+                    if s == Section::RouteRules {
+                        labels::route_action_label(v).into()
+                    } else {
+                        a
+                    }
                 } else {
                     format!("{a} → {}", app.label(&t))
                 },
@@ -425,13 +438,29 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     });
     let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
     let s = section(app);
-    let mut spans = vec![Span::styled("Config / ", theme::s(theme::dim()))];
+    let mut spans = vec![Span::styled(
+        match s {
+            Section::DnsServers | Section::DnsRules | Section::DnsOptions => "Config / dns   ",
+            Section::RouteRules | Section::RuleSets | Section::RouteOptions => "Config / route   ",
+            _ => "Config / ",
+        },
+        theme::s(theme::dim()),
+    )];
     if siblings(s).is_empty() {
         spans.push(Span::styled(s.label(), theme::bold(theme::accent())));
     } else {
         for i in siblings(s) {
             spans.push(Span::styled(
-                format!("{}   ", Section::ALL[*i].label()),
+                format!(
+                    "{}   ",
+                    match Section::ALL[*i] {
+                        Section::DnsServers => "Servers",
+                        Section::DnsRules | Section::RouteRules => "Rules",
+                        Section::DnsOptions | Section::RouteOptions => "Options",
+                        Section::RuleSets => "Rule sets",
+                        other => other.label(),
+                    }
+                ),
                 if *i == app.config.section {
                     theme::bold(theme::accent())
                 } else {
@@ -439,7 +468,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                 },
             ));
         }
-        spans.push(Span::styled("[/]", theme::key()));
+        spans.push(Span::styled("← →", theme::s(theme::dim())));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), nav);
     draw_body(f, body, app);
@@ -568,7 +597,6 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("esc", "back"),
         ],
         s if s.list() => vec![
-            ("[/]", "section"),
             ("↑↓", "item"),
             ("enter", "edit"),
             ("n", "new"),

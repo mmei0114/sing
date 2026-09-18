@@ -72,16 +72,6 @@ pub fn age(seconds: u64) -> String {
         format!("{} ago", ago(seconds))
     }
 }
-pub fn duration(seconds: u64) -> String {
-    let (h, m) = (seconds / 3600, (seconds % 3600) / 60);
-    if h > 0 {
-        format!("{h}h {m:02}m")
-    } else if m > 0 {
-        format!("{m}m {:02}s", seconds % 60)
-    } else {
-        format!("{seconds}s")
-    }
-}
 /// Core timestamps arrive in milliseconds; older builds used seconds.
 pub fn epoch_seconds(t: i64) -> u64 {
     if t > 100_000_000_000 {

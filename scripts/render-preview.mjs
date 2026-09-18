@@ -17,14 +17,14 @@ if (!lines.some(line => line.includes('1 Overview')) || !lines.some(line => line
 }
 const escape = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const rows = lines.map((line, i) => {
-  const color = i === 1 || i === lines.length - 1 ? '#72d8bf' : i === 0 || i === lines.length - 3 ? '#8797a9' : '#dae2e9';
+  const color = i === 1 || i === lines.length - 1 ? '#c4adf0' : i === 0 || i === lines.length - 3 ? '#9e97ae' : '#e5e1ed';
   return `<text x="24" y="${74 + i * 20}" fill="${color}" xml:space="preserve">${escape(line)}</text>`;
 }).join('\n');
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="722" viewBox="0 0 1120 722" role="img" aria-labelledby="title desc">
 <title id="title">${escape(version)} — real terminal preview</title>
 <desc id="desc">The Overview layout rendered by sing --preview, with simplified documentation colors. Fictional running demo with no real traffic. Three workspaces, live evidence, proxy groups, and fixed Start, Mode and TUN controls.</desc>
-<rect width="1120" height="722" rx="14" fill="#0f1724"/>
-<path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1b2738"/>
+<rect width="1120" height="722" rx="14" fill="#171320"/>
+<path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1f1a2b"/>
 <circle cx="25" cy="21" r="5" fill="#fa7d86"/><circle cx="43" cy="21" r="5" fill="#f2cc72"/><circle cx="61" cy="21" r="5" fill="#78dba9"/>
 <text x="560" y="26" text-anchor="middle" fill="#b4c4dc" font-size="13" font-family="monospace">sing · fictional demo · 110 × 32</text>
 <g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16">${rows}</g>

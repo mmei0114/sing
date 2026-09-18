@@ -94,7 +94,9 @@ Routing works with destination and process metadata, not arbitrary HTTPS URL pat
 
 ## Activity and application discovery
 
-Activity shows bounded, in-memory observations obtained from the core—not a persistent packet capture or a list of every running process. Use `/` to filter and `o` to sort by recency or observed traffic. Browsing pauses observations to keep the selected connection stable; Space resumes updates.
+Activity shows bounded, in-memory observations obtained from the core—not a persistent packet capture or a list of every running process. Use `/` to filter and `o` to sort by recency or observed traffic. Browsing holds the reading view to keep the selected connection stable, while incoming snapshots continue to update the session history. **Held · Space live** means the view is held, not that collection stopped. Space shows the latest collected observations. Connections that begin and end between core samples can still be missed.
+
+Pressing `3`, or `c` from Overview, opens **All connections** and clears the previous app/search scope. Entering a connection list from Apps shows that application's name and an **Esc back** hint. Left/Right section navigation leaves the app scope. The connection list uses the full width by default; `d` toggles a side detail pane in wide terminals (128 columns or more). `Enter` opens full details at any size.
 
 In **Apps**, `Enter` shows the selected application's observed destinations. `r` creates a process-based routing correction when the necessary identity exists. Route paths come from the connection's reported chain, not from the node selected afterwards.
 
@@ -113,7 +115,7 @@ If `f` reports **Broken pipe** after upgrading from an earlier build, restart th
 
 ## DNS and native configuration
 
-Open `:` and select **dns**. Use `[` / `]` for **Servers**, **Rules** and **Options**:
+Open `:` and select **dns**. Use Left/Right for **Servers**, **Rules** and **Options**:
 
 - **Servers** define resolvers and their transports, such as local DNS, UDP or HTTPS.
 - **Rules** choose how matching DNS queries are handled.
@@ -132,7 +134,7 @@ Forms retain unknown sibling fields. Full JSON covers fields without dedicated c
 | Key | Action |
 |---|---|
 | `1` / `2` / `3` | Overview / Policies / Activity |
-| `[` / `]` | Previous / next section |
+| Left / Right | Previous / next section |
 | Arrows or `j` / `k` | Select a row |
 | `Enter` / `Esc` | Open or confirm / return or cancel |
 | `s` / `m` / `t` | Start/Stop / Mode / TUN |
@@ -148,15 +150,18 @@ Forms retain unknown sibling fields. Full JSON covers fields without dedicated c
 | `c` / `v` on Overview | Open Activity / connectivity check |
 | `/` / `o` in Activity | Filter / sort |
 | `r` / `f` in Activity | Routing correction / app discovery |
-| Space in Activity | Resume observations |
+| `d` in Activity → Connections | Toggle side details in wide terminals |
+| Space in Activity | Hold the reading view / return live; collection continues |
 | `F2` or `Ctrl+S` in editors | Save draft |
 | `?` / `q` | Help / close the interface |
 
 Text input and modal dialogs take precedence over workspace shortcuts. `q` leaves a running manager/core active; use `s` or `sing --shutdown` to stop it.
 
+The `[` and `]` keys remain aliases for section navigation, without repeated on-screen hints.
+
 ## Upgrade safely
 
-The current preview is **0.6.3-dev**, using manager protocol **10**. Replacing an executable or reopening the interface does not update an already running manager. This version's IPC fix requires restarting it.
+The published preview **0.6.3-dev** uses manager protocol **10**. Replacing an executable or reopening the interface does not update an already running manager. Its IPC fix requires restarting an older manager. The **0.6.4-dev** interface refinements keep protocol 10 and need only a UI reopen if the manager is already running the 0.6.3-dev IPC fix.
 
 1. Back up your private data and current executable.
 2. Close interfaces with `q`.

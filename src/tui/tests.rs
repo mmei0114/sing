@@ -77,7 +77,8 @@ fn config_follows_native_sections_and_dns_uses_the_shared_editor() {
     app.key(key(KeyCode::Enter));
     app.drain();
     let dns = screen(&app, 110, 30);
-    assert!(dns.contains("dns › servers"));
+    assert!(dns.contains("Config / dns"));
+    assert!(dns.contains("Servers"));
     assert!(dns.contains("dns-proxy"), "{dns}");
     app.key(key(KeyCode::Enter));
     app.drain();
@@ -125,24 +126,42 @@ fn overview_scales_and_keeps_controls_and_actual_connections() {
 }
 
 #[test]
-fn observation_pause_holds_identity_until_explicit_resume() {
+fn browsing_holds_view_but_collects_every_observed_snapshot() {
     let mut app = demo_app();
     app.go(Tab::Activity);
     app.key(key(KeyCode::Down));
-    let id = app.history.entries[1].c.id.clone();
+    let id = app.observation_view().entries[1].c.id.clone();
     let mut c = app.history.entries[0].c.clone();
     c.id = "new-connection".into();
     c.created_at += 20000;
     app.observe_connections(runtime::ConnectionReport {
         observed_at: 123,
         total: 1,
+        items: vec![c.clone()],
+    });
+    assert_eq!(app.observation_view().entries[1].c.id, id);
+    assert!(app.frozen_history.is_some());
+    assert!(app
+        .history
+        .entries
+        .iter()
+        .any(|e| e.c.id == "new-connection"));
+    c.id = "later-connection".into();
+    c.created_at += 20000;
+    app.observe_connections(runtime::ConnectionReport {
+        observed_at: 124,
+        total: 1,
         items: vec![c],
     });
-    assert_eq!(app.history.entries[1].c.id, id);
-    assert!(app.pending_connections.is_some());
+    assert!(app
+        .history
+        .entries
+        .iter()
+        .any(|e| e.c.id == "new-connection" && !e.open));
+    assert_eq!(app.observation_view().entries[1].c.id, id);
     app.key(key(KeyCode::Char(' ')));
-    assert_eq!(app.history.entries[0].c.id, "new-connection");
-    assert!(app.pending_connections.is_none());
+    assert_eq!(app.observation_view().entries[0].c.id, "later-connection");
+    assert!(app.frozen_history.is_none());
 }
 
 #[test]
@@ -231,12 +250,186 @@ fn unidentified_app_cannot_silently_become_a_domain_rule() {
 }
 
 #[test]
-#[ignore = "Writes fictional renderer snapshots to .build/polish-review"]
+fn section_navigation_has_no_bracket_hints() {
+    let mut app = demo_app();
+    for tab in [Tab::Proxies, Tab::Activity] {
+        app.go(tab);
+        for _ in 0..3 {
+            for (w, h) in [(54, 18), (80, 24), (140, 32)] {
+                let view = screen(&app, w, h);
+                assert!(!view.contains("[/]"), "{view}");
+                assert_eq!(view.matches("← →").count(), 1, "{view}");
+            }
+            app.key(key(KeyCode::Right));
+        }
+    }
+    config::open_menu(&mut app);
+    app.paste("dns");
+    app.key(key(KeyCode::Enter));
+    app.drain();
+    for _ in 0..3 {
+        assert!(!screen(&app, 100, 28).contains("[/]"));
+        assert_eq!(screen(&app, 100, 28).matches("← →").count(), 1);
+        app.key(key(KeyCode::Right));
+    }
+}
+
+#[test]
+fn workspace_subsections_sit_directly_below_the_navigation_underline() {
+    let mut app = demo_app();
+    for (tab, title) in [(Tab::Proxies, "Groups"), (Tab::Activity, "Connections")] {
+        app.go(tab);
+        for (w, h) in [(54, 18), (80, 24), (140, 32)] {
+            let view = screen(&app, w, h);
+            assert!(view.lines().nth(1).unwrap().contains('━'), "{view}");
+            assert!(view.lines().nth(2).unwrap().contains(title), "{view}");
+        }
+    }
+}
+
+#[test]
+fn overview_content_sits_directly_below_the_navigation_underline() {
+    let app = demo_app();
+    for (w, h) in [(54, 18), (80, 24), (140, 32)] {
+        let view = screen(&app, w, h);
+        assert!(view.lines().nth(1).unwrap().contains('━'), "{view}");
+        assert!(view.lines().nth(2).unwrap().contains("Capture"), "{view}");
+    }
+}
+
+#[test]
+fn traffic_arrows_keep_a_single_space_before_the_value() {
+    let mut app = demo_app();
+    for available in [true, false] {
+        app.snap.status.traffic_available = available;
+        for (w, h) in [(80, 24), (140, 32)] {
+            let view = screen(&app, w, h);
+            let header = view.lines().take(2).collect::<Vec<_>>().join("\n");
+            assert!(header.contains("↓ ") && header.contains("↑ "), "{view}");
+            assert!(!header.contains("↓  ") && !header.contains("↑  "), "{view}");
+            if !available {
+                assert!(header.contains("↓ —  ↑ —"), "{view}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unmatched_traffic_is_editable_through_native_route_options() {
+    let mut app = demo_app();
+    app.key(key(KeyCode::Char(':')));
+    app.paste("route");
+    app.key(key(KeyCode::Enter));
+    app.drain();
+    app.key(key(KeyCode::Left));
+    assert!(screen(&app, 100, 28).contains("Options"));
+    app.key(key(KeyCode::Enter));
+    app.drain();
+    let view = screen(&app, 100, 28);
+    assert!(view.contains("Unmatched traffic"), "{view}");
+    app.key(key(KeyCode::Enter));
+    assert!(screen(&app, 100, 28).contains("Proxy"));
+}
+
+#[test]
+fn overview_has_wordmark_and_compact_honest_rates_without_chart() {
+    let mut app = demo_app();
+    for (w, h) in [(54, 18), (80, 24), (140, 32)] {
+        let view = screen(&app, w, h);
+        assert!(view.contains("SING"));
+        assert!(!view.contains('◆'));
+        assert!(!view.contains("Traffic"));
+        assert!(!view.contains("sampled / combined"));
+        if w >= 80 {
+            assert!(view.lines().take(2).any(|l| l.contains("KB/s")), "{view}");
+        }
+    }
+    app.snap.status.traffic_available = false;
+    let view = screen(&app, 140, 32);
+    assert!(!view.lines().take(2).any(|l| l.contains("KB/s")));
+    assert!(view.lines().take(2).any(|l| l.contains('—')));
+}
+
+#[test]
+fn activity_top_level_entry_and_section_switch_clear_app_scope() {
+    let mut app = demo_app();
+    app.key(key(KeyCode::Char('3')));
+    app.key(key(KeyCode::Right));
+    app.key(key(KeyCode::Enter));
+    assert!(app.activity.app_filter.is_some());
+    let held = screen(&app, 54, 18);
+    assert!(held.contains("Esc back"), "{held}");
+    assert!(held.contains("Held"), "{held}");
+    app.key(key(KeyCode::Esc));
+    assert_eq!(app.activity.section, activity::Section::Apps);
+    app.key(key(KeyCode::Enter));
+    app.key(key(KeyCode::Char('1')));
+    app.key(key(KeyCode::Char('c')));
+    assert!(app.activity.app_filter.is_none());
+    assert!(!app.activity.paused);
+    assert_eq!(app.activity.section, activity::Section::Requests);
+    assert!(screen(&app, 100, 28).contains("All connections"));
+    app.key(key(KeyCode::Right));
+    app.key(key(KeyCode::Enter));
+    app.key(key(KeyCode::Right));
+    app.key(key(KeyCode::Left));
+    assert!(app.activity.app_filter.is_none());
+    app.activity.query = "no-match".into();
+    app.key(key(KeyCode::Char('3')));
+    assert!(app.activity.query.is_empty());
+}
+
+#[test]
+fn activity_detail_pane_is_opt_in_and_does_not_hide_list_by_default() {
+    let mut app = demo_app();
+    app.go(Tab::Activity);
+    assert!(!screen(&app, 140, 32).contains("Matched rule"));
+    app.key(key(KeyCode::Char('d')));
+    assert!(screen(&app, 140, 32).contains("Matched rule"));
+    app.key(key(KeyCode::Enter));
+    assert!(screen(&app, 80, 24).contains("Connection evidence"));
+}
+
+#[test]
+fn rule_labels_are_readable_without_mutating_native_document() {
+    let mut app = demo_app();
+    app.snap.store.native.as_mut().unwrap()["route"]["rules"] = json!([
+        {"action":"sniff"}, {"protocol":"dns","action":"hijack-dns"}
+    ]);
+    let original = app.doc().clone();
+    app.go(Tab::Proxies);
+    app.key(key(KeyCode::Right));
+    let view = screen(&app, 140, 32);
+    assert!(view.contains("All connections"));
+    assert!(view.contains("Detect protocol"));
+    assert!(view.contains("DNS traffic"));
+    assert!(view.contains("Handle DNS"));
+    assert!(view.contains("(sniff)"));
+    assert_eq!(&original, app.doc());
+    assert!(app.outbox.is_empty());
+}
+
+#[test]
+#[ignore = "Writes fictional renderer snapshots to .build/violet-polish"]
 fn render_polish_review() {
     use ratatui::style::{Color, Modifier};
     fn color(c: Color) -> String {
         match c {
             Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            Color::Indexed(i) if i >= 232 => {
+                let v = 8 + (i - 232) as u16 * 10;
+                format!("#{v:02x}{v:02x}{v:02x}")
+            }
+            Color::Indexed(i) if i >= 16 => {
+                let i = i - 16;
+                let levels = [0, 95, 135, 175, 215, 255];
+                let (r, g, b) = (
+                    levels[(i / 36) as usize],
+                    levels[((i / 6) % 6) as usize],
+                    levels[(i % 6) as usize],
+                );
+                format!("#{r:02x}{g:02x}{b:02x}")
+            }
             _ => "#dee4eb".into(),
         }
     }
@@ -246,7 +439,13 @@ fn render_polish_review() {
             .replace('>', "&gt;")
             .replace('"', "&quot;")
     }
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".build/polish-review");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        if theme::background() == Color::Rgb(23, 19, 32) {
+            ".build/violet-polish/truecolor"
+        } else {
+            ".build/violet-polish/indexed"
+        },
+    );
     std::fs::create_dir_all(&dir).unwrap();
     for (name, w, h) in [
         ("overview", 120, 32),
@@ -256,6 +455,10 @@ fn render_polish_review() {
         ("dns", 100, 28),
         ("apps", 110, 30),
         ("connections", 80, 24),
+        ("connections-wide", 140, 32),
+        ("connections-detail", 140, 32),
+        ("connections-held", 54, 18),
+        ("rules", 110, 30),
         ("policies", 110, 30),
         ("editor", 80, 24),
     ] {
@@ -276,18 +479,36 @@ fn render_polish_review() {
                 app.go(Tab::Activity);
                 app.key(key(KeyCode::Char(']')));
             }
-            "connections" => app.go(Tab::Activity),
+            "connections" | "connections-wide" => app.go(Tab::Activity),
+            "connections-detail" => {
+                app.go(Tab::Activity);
+                app.activity.show_details = true;
+            }
+            "connections-held" => {
+                app.go(Tab::Activity);
+                app.key(key(KeyCode::Right));
+                app.key(key(KeyCode::Enter));
+            }
+            "rules" => {
+                app.snap.store.native.as_mut().unwrap()["route"]["rules"] = json!([
+                    {"action":"sniff"},
+                    {"protocol":"dns","action":"hijack-dns"},
+                    {"domain_suffix":["example.com"],"outbound":"proxy"}
+                ]);
+                app.go(Tab::Proxies);
+                app.key(key(KeyCode::Right));
+            }
             "policies" => app.go(Tab::Proxies),
             _ => {}
         }
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| draw(f, &app)).unwrap();
-        let mut svg=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\"><rect width=\"100%\" height=\"100%\" fill=\"#0f1722\"/><g font-family=\"Menlo,monospace\" font-size=\"16\" xml:space=\"preserve\">", w as usize*10+32,h as usize*21+32);
+        let mut svg=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\"><rect width=\"100%\" height=\"100%\" fill=\"{}\"/><g font-family=\"Menlo,monospace\" font-size=\"16\" xml:space=\"preserve\">", w as usize*10+32,h as usize*21+32, color(theme::background()));
         for (i, c) in term.backend().buffer().content.iter().enumerate() {
             let x = 16 + i % w as usize * 10;
             let y = 16 + i / w as usize * 21;
             let bg = if c.bg == Color::Reset {
-                "#0f1722".into()
+                color(theme::background())
             } else {
                 color(c.bg)
             };

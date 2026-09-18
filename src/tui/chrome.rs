@@ -36,92 +36,98 @@ fn spinner() -> &'static str {
 pub fn header(f: &mut Frame, area: Rect, app: &App) {
     let [top, rule] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
     let mut spans = vec![
-        Span::styled(" ◆ ", theme::s(theme::accent())),
-        Span::styled("sing", theme::bold(theme::text())),
-        Span::raw("   "),
+        Span::raw("  "),
+        Span::styled("SING", theme::bold(theme::accent())),
+        Span::raw(if area.width < 80 { "  " } else { "   " }),
     ];
-    let mut underline = vec![Span::styled("─".repeat(10), theme::s(theme::faint()))];
-    let tabs: Vec<(Tab, String)> = Tab::MAIN
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (*t, format!("{} {}", i + 1, t.name())))
-        .collect();
-    for (tab, name) in tabs {
-        let on = tab == app.tab;
+    let gap = if area.width < 80 { "  " } else { "   " };
+    let mut underline = vec![Span::raw(" ".repeat(6 + gap.len()))];
+    for (i, tab) in Tab::MAIN.iter().enumerate() {
+        let name = format!("{} {}", i + 1, tab.name());
+        let on = *tab == app.tab;
         let w = text::width(&name);
         spans.push(Span::styled(
-            name.clone(),
+            name,
             if on {
-                theme::bold(theme::accent())
+                theme::bold(theme::text())
             } else {
                 theme::s(theme::dim())
             },
         ));
-        spans.push(Span::raw("   "));
+        spans.push(Span::raw(gap));
         underline.push(Span::styled(
-            if on { "━".repeat(w) } else { "─".repeat(w) },
-            theme::s(if on { theme::accent() } else { theme::faint() }),
+            if on { "━".repeat(w) } else { " ".repeat(w) },
+            theme::s(theme::accent()),
         ));
-        underline.push(Span::styled("───", theme::s(theme::faint())));
+        underline.push(Span::raw(gap));
     }
-    let used: usize = underline.iter().map(|s| text::width(&s.content)).sum();
-    underline.push(Span::styled(
-        "─".repeat((area.width as usize).saturating_sub(used)),
-        theme::s(theme::faint()),
-    ));
-    f.render_widget(Paragraph::new(Line::from(spans.clone())), top);
-    f.render_widget(Paragraph::new(Line::from(underline)), rule);
-
-    // Right side: status and traffic.
+    let used: usize = spans.iter().map(|s| text::width(&s.content)).sum();
+    let room = (area.width as usize).saturating_sub(used + 2);
     let s = &app.snap;
-    let mut status = vec![];
-    if let Some((label, _)) = &app.busy {
-        status.push(Span::styled(
-            format!("{} {label}… ", spinner()),
-            theme::s(theme::warn()),
-        ));
+    let status = if let Some((label, _)) = &app.busy {
+        format!("{} {}", spinner(), label)
+    } else if room < 9 && s.connected {
+        "● Live".into()
+    } else if room < 9 {
+        "○ Off".into()
     } else if s.connected {
-        status.push(Span::styled("● ", theme::s(theme::good())));
-        status.push(Span::styled("Running", theme::s(theme::text())));
-        if s.started_at > 0 {
-            status.push(Span::styled(
-                format!(
-                    " {}",
-                    text::duration(crate::model::now().saturating_sub(s.started_at))
-                ),
-                theme::s(theme::dim()),
-            ));
-        }
-        if app.tab != Tab::Overview
-            && s.api_ready
-            && s.status.traffic_available
-            && app.snapshot_at.elapsed().as_secs() < 6
-        {
-            status.push(Span::styled(
-                format!(
-                    "   ↓ {}  ↑ {} ",
-                    text::rate(s.status.downlink),
-                    text::rate(s.status.uplink)
-                ),
-                theme::s(theme::dim()),
-            ));
-        } else {
-            status.push(Span::raw(" "));
-        }
+        "● Running".into()
     } else {
-        status.push(Span::styled("○ ", theme::s(theme::dim())));
-        status.push(Span::styled("Stopped ", theme::s(theme::dim())));
+        "○ Stopped".into()
+    };
+    let live = s.connected
+        && s.api_ready
+        && s.status.traffic_available
+        && app.snapshot_at.elapsed().as_secs() < 6;
+    let rates = if live {
+        format!(
+            "↓ {}  ↑ {}",
+            text::rate(s.status.downlink),
+            text::rate(s.status.uplink)
+        )
+    } else {
+        "↓ —  ↑ —".into()
+    };
+    let status_color = if app.busy.is_some() {
+        theme::warn()
+    } else {
+        theme::dim()
+    };
+    let mut right = vec![Span::styled(status.clone(), theme::s(status_color))];
+    let inline_rates = text::width(&status) + text::width(&rates) + 3 <= room && app.busy.is_none();
+    if inline_rates {
+        right.push(Span::raw("   "));
+        right.push(Span::styled(rates.clone(), theme::s(theme::text())));
     }
-    let status_w: usize = status.iter().map(|s| text::width(&s.content)).sum();
-    let tabs_w: usize = spans.iter().map(|s| text::width(&s.content)).sum();
-    if (area.width as usize) > tabs_w + status_w + 1 {
-        f.render_widget(Paragraph::new(Line::from(status)).right_aligned(), top);
+    // Keep essential status on narrow terminals; drop rates before navigation.
+    let width: usize = right.iter().map(|s| text::width(&s.content)).sum();
+    f.render_widget(Paragraph::new(Line::from(spans)), top);
+    f.render_widget(Paragraph::new(Line::from(underline)), rule);
+    if !inline_rates && app.busy.is_none() && text::width(&rates) <= room {
+        f.render_widget(
+            Paragraph::new(rates)
+                .style(theme::s(theme::text()))
+                .right_aligned(),
+            Rect {
+                width: rule.width.saturating_sub(2),
+                ..rule
+            },
+        );
+    }
+    if width <= room {
+        f.render_widget(
+            Paragraph::new(Line::from(right)).right_aligned(),
+            Rect {
+                width: top.width.saturating_sub(2),
+                ..top
+            },
+        );
     }
 }
 
 pub fn hint_line(f: &mut Frame, area: Rect, app: &App, hints: &[(&str, &str)]) {
-    let mut spans = vec![Span::raw(" ")];
-    let mut used = 1;
+    let mut spans = vec![Span::raw("  ")];
+    let mut used = 2;
     for (k, label) in hints {
         let gap = if area.width < 80 { 1 } else { 3 };
         let needed = text::width(k) + text::width(label) + 1 + gap;
@@ -240,7 +246,7 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
     for (i, seg) in segments.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(
-                " │ ",
+                "   ",
                 Style::default().fg(theme::faint()).bg(theme::panel()),
             ));
         }
@@ -298,7 +304,7 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme::warn()).bg(theme::panel()),
         ));
         right.push(Span::styled(
-            " │ ",
+            "   ",
             Style::default().fg(theme::faint()).bg(theme::panel()),
         ));
     }
@@ -326,7 +332,7 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
             }),
     ));
     right.push(Span::styled(
-        "│ ",
+        "  ",
         Style::default().fg(theme::faint()).bg(theme::panel()),
     ));
     right.push(Span::styled(

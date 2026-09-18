@@ -5,7 +5,7 @@
 **Choose where your traffic goes. See how it gets there.**
 
 [![CI](https://github.com/mmei0114/sing/actions/workflows/ci.yml/badge.svg)](https://github.com/mmei0114/sing/actions/workflows/ci.yml)
-[![Preview](https://img.shields.io/badge/preview-0.6.3--dev-72d8bf)](https://github.com/mmei0114/sing/releases/tag/v0.6.3-dev)
+[![Source preview](https://img.shields.io/badge/source_preview-0.6.4--dev-c4adf0)](https://github.com/mmei0114/sing/tree/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 sing brings rule-based proxying, application-aware routing and connection monitoring to the terminal. Import your subscriptions, organize proxies into groups, and decide which traffic connects directly or uses a proxy—all in a keyboard-first interface.
@@ -47,12 +47,11 @@ Install [Rust and Cargo](https://www.rust-lang.org/tools/install), Git, and your
 ```sh
 git clone https://github.com/mmei0114/sing.git
 cd sing
-git checkout v0.6.3-dev
 cargo build --release --locked
 ./sing --demo
 ```
 
-The demo needs no subscription or core, and never changes your network. Press `q` to leave it, then run `./sing` for your own setup. To install the command on your PATH instead, run `cargo install --path . --locked`.
+These steps build the latest source on `main`; tagged snapshots are available under [Releases](https://github.com/mmei0114/sing/releases). The demo needs no subscription or core, and never changes your network. Press `q` to leave it, then run `./sing` for your own setup. To install the command on your PATH instead, run `cargo install --path . --locked`.
 
 ### Make your first connection
 
@@ -64,7 +63,7 @@ The demo needs no subscription or core, and never changes your network. Press `q
 
 **Starting the core does not automatically proxy every application.** Over SSH, sing controls the remote host—not the computer you are connecting from. Avoid TUN on your only SSH connection.
 
-Press `s` to stop proxying. **`q` only closes the interface; a running core stays active.** Existing users should follow [safe upgrade instructions](docs/usage.md#upgrade-safely), including a manager restart for this release's macOS communication fix.
+Press `s` to stop proxying. **`q` only closes the interface; a running core stays active.** Existing users should follow [safe upgrade instructions](docs/usage.md#upgrade-safely), including a manager restart when upgrading from a build without the 0.6.3-dev macOS communication fix.
 
 ## Three places to work
 
@@ -74,7 +73,7 @@ Press `s` to stop proxying. **`q` only closes the interface; a running core stay
 | **2 Policies** | Organize proxy groups, ordered routing rules and subscription sources. |
 | **3 Activity** | Inspect connections, observed apps and logs; correct routing. |
 
-`[` / `]` change sections. Arrows select, `Enter` opens, `Esc` returns. The bottom controls stay available: `s` Start/Stop · `m` Mode · `t` TUN · `:` Config · `A` Review & Apply · `?` Help.
+Left/Right change sections; Up/Down select rows. `Enter` opens and `Esc` returns. The bottom controls stay available: `s` Start/Stop · `m` Mode · `t` TUN · `:` Config · `A` Review & Apply · `?` Help.
 
 Use an **80×24 or larger** terminal. No mouse or special icon font is required.
 

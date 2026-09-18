@@ -225,7 +225,7 @@ impl Demo {
             self.connections.drain(..100);
         }
         app.observe(self.snapshot());
-        app.history.observe(self.report(), true);
+        app.observe_connections(self.report());
     }
     /// Tiny evaluator for the demo's own simple rules, enough to make fixes visible.
     fn route(&self, app: &str, host: &str) -> String {

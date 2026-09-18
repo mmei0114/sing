@@ -1,4 +1,4 @@
-//! One quiet palette. Truecolor where the terminal supports it, the nearest
+//! Ink violet, soft white and restrained lavender. Truecolor where supported;
 //! 256-color entries elsewhere (Terminal.app, tmux without RGB).
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -23,40 +23,40 @@ fn c(pair: (Color, Color)) -> Color {
 }
 
 pub fn accent() -> Color {
-    c(pick((114, 216, 191), 115))
+    c(pick((196, 173, 240), 183))
 }
 pub fn text() -> Color {
-    c(pick((222, 228, 235), 254))
+    c(pick((229, 225, 237), 254))
 }
 pub fn dim() -> Color {
-    c(pick((134, 146, 160), 245))
+    c(pick((158, 151, 174), 247))
 }
 pub fn faint() -> Color {
-    c(pick((72, 82, 96), 239))
+    c(pick((130, 120, 148), 244))
 }
 pub fn good() -> Color {
-    c(pick((126, 220, 150), 114))
+    c(pick((156, 202, 172), 150))
 }
 pub fn warn() -> Color {
-    c(pick((240, 200, 110), 221))
+    c(pick((231, 192, 130), 180))
 }
 pub fn bad() -> Color {
-    c(pick((246, 124, 132), 210))
+    c(pick((235, 145, 162), 211))
 }
 pub fn info() -> Color {
-    c(pick((128, 176, 255), 111))
+    c(pick((162, 180, 224), 146))
 }
 pub fn violet() -> Color {
-    c(pick((186, 156, 255), 141))
+    c(pick((186, 169, 208), 182))
 }
 pub fn selection() -> Color {
-    c(pick((40, 52, 66), 236))
+    c(pick((52, 43, 70), 237))
 }
 pub fn panel() -> Color {
-    c(pick((24, 30, 38), 234))
+    c(pick((31, 26, 43), 235))
 }
 pub fn background() -> Color {
-    c(pick((15, 23, 34), 233))
+    c(pick((23, 19, 32), 234))
 }
 
 pub fn s(fg: Color) -> Style {
@@ -66,7 +66,7 @@ pub fn bold(fg: Color) -> Style {
     Style::default().fg(fg).add_modifier(Modifier::BOLD)
 }
 pub fn key() -> Style {
-    Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+    Style::default().fg(text()).add_modifier(Modifier::BOLD)
 }
 pub fn selected_row() -> Style {
     Style::default().bg(selection())

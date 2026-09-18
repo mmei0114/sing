@@ -1,6 +1,6 @@
 [package]
 name = "sing"
-version = "0.6.3-dev"
+version = "0.6.4-dev"
 edition = "2021"
 description = "A terminal network proxy powered by sing-box: rule-based routing, proxy groups and connection activity"
 license = "MIT"

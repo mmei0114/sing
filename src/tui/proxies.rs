@@ -205,25 +205,26 @@ fn refresh_source(app: &mut App) {
 }
 
 fn tabs(app: &App) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![];
     for section in Section::ALL {
         spans.push(Span::styled(
-            format!(" {} ", section.name()),
+            section.name().to_string(),
             if section == app.proxies.section {
                 theme::bold(theme::accent())
             } else {
                 theme::s(theme::dim())
             },
         ));
-        spans.push(Span::raw("  "));
+        spans.push(Span::raw("   "));
     }
+    spans.push(Span::styled("← →", theme::s(theme::dim())));
     Line::from(spans)
 }
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let area = area.inner(ratatui::layout::Margin {
         horizontal: 2,
-        vertical: 1,
+        vertical: 0,
     });
     let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
     f.render_widget(Paragraph::new(tabs(app)), nav);
@@ -261,6 +262,7 @@ fn draw_groups(f: &mut Frame, area: Rect, app: &App) {
     let name_w = (w / 3).clamp(14, 28);
     let member_w = w.saturating_sub(name_w + 20).max(12);
     let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
         Span::styled(text::cell("GROUP", name_w), theme::s(theme::faint())),
         Span::styled(text::cell("CURRENT", member_w), theme::s(theme::faint())),
         Span::styled(text::right("LATENCY", 10), theme::s(theme::faint())),
@@ -313,13 +315,15 @@ fn draw_rules(f: &mut Frame, area: Rect, app: &App) {
     let w = list.width as usize;
     let match_w = w.saturating_sub(24).max(12);
     let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
         Span::styled(text::cell("MATCH", match_w), theme::s(theme::faint())),
         Span::styled("ACTION", theme::s(theme::faint())),
     ])];
     for (i, rule) in rows.iter().enumerate().skip(start).take(height) {
-        let (action, target) = labels::action(rule);
+        let (_, target) = labels::action(rule);
+        let action = labels::route_action_label(rule);
         let action_text = if target.is_empty() {
-            action
+            action.into()
         } else if target == "reject" {
             "Reject".into()
         } else {
@@ -330,7 +334,11 @@ fn draw_rules(f: &mut Frame, area: Rect, app: &App) {
             vec![
                 Span::styled(
                     text::cell(
-                        &format!("{:>3}  {}", i + 1, labels::matcher(&app.snap.store, rule)),
+                        &format!(
+                            "{:>3}  {}",
+                            i + 1,
+                            labels::route_matcher(&app.snap.store, rule)
+                        ),
                         match_w,
                     ),
                     theme::s(theme::text()),
@@ -346,7 +354,21 @@ fn draw_rules(f: &mut Frame, area: Rect, app: &App) {
     if let Some(detail) = detail {
         let rule = &rows[selected];
         let (action, target) = labels::action(rule);
-        f.render_widget(Paragraph::new(format!("RULE {}\n\nWhen\n{}\n\nAction\n{}{}\n\nOrder is authoritative. J/K moves this rule; saving does not apply until A.", selected + 1, labels::matcher(&app.snap.store, rule), action, if target.is_empty() { String::new() } else { format!(" → {}", app.label(&target)) })).wrap(Wrap { trim: false }), detail);
+        f.render_widget(
+            Paragraph::new(format!(
+                "Rule {}\n\nMatch\n{}\n\nAction\n{} ({action}){}\n\nNative order is preserved.",
+                selected + 1,
+                labels::route_matcher(&app.snap.store, rule),
+                labels::route_action_label(rule),
+                if target.is_empty() {
+                    String::new()
+                } else {
+                    format!(" → {}", app.label(&target))
+                }
+            ))
+            .wrap(Wrap { trim: false }),
+            detail,
+        );
     }
 }
 
@@ -360,6 +382,7 @@ fn draw_sources(f: &mut Frame, area: Rect, app: &App) {
     let height = area.height.saturating_sub(1) as usize;
     let start = modal::scroll(selected, height, n);
     let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
         Span::styled(text::cell("SOURCE", 30), theme::s(theme::faint())),
         Span::styled(text::cell("KIND", 16), theme::s(theme::faint())),
         Span::styled("STATUS", theme::s(theme::faint())),
@@ -414,7 +437,6 @@ fn draw_sources(f: &mut Frame, area: Rect, app: &App) {
 pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
     match app.proxies.section {
         Section::Groups => vec![
-            ("[/]", "section"),
             ("↑↓", "group"),
             ("enter", "choose"),
             ("n", "new group"),
@@ -423,7 +445,6 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("i", "import nodes"),
         ],
         Section::Rules => vec![
-            ("[/]", "section"),
             ("↑↓", "rule"),
             ("enter", "edit"),
             ("n", "new rule"),
@@ -431,7 +452,6 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("J/K", "move"),
         ],
         Section::Sources => vec![
-            ("[/]", "section"),
             ("↑↓", "source"),
             ("u", "update"),
             ("i", "import nodes"),

@@ -50,7 +50,7 @@ pub fn app_name(c: &api::Connection) -> String {
     super::identity::display(c)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct History {
     pub entries: Vec<Entry>,
     index: HashMap<String, usize>,

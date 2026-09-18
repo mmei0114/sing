@@ -1645,7 +1645,7 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "sing"
-version = "0.6.3-dev"
+version = "0.6.4-dev"
 dependencies = [
  "anyhow",
  "base64",

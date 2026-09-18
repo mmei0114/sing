@@ -1,13 +1,13 @@
 //! Capture health, traffic, quick groups and live evidence.
 use super::{
-    activity, config, flows, history, labels, modal, proxies, quick_rule, text, theme, App, Tab,
+    activity, config, flows, history, labels, modal, proxies, quick_rule, text, theme, App,
 };
 use crate::{native, runtime::Action};
 use crossterm::event::{KeyCode as K, KeyEvent};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Paragraph, Sparkline},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -33,7 +33,11 @@ fn ready(app: &App) -> bool {
             || !native::array(app.doc(), "/endpoints").is_empty())
 }
 fn connections(app: &App) -> Vec<&history::Entry> {
-    app.history.entries.iter().filter(|e| e.open).collect()
+    app.observation_view()
+        .entries
+        .iter()
+        .filter(|e| e.open)
+        .collect()
 }
 fn needs_recovery(app: &App) -> bool {
     let p = &app.snap.system_proxy;
@@ -47,31 +51,30 @@ pub fn key(app: &mut App, k: KeyEvent) {
         return;
     }
     if k.code == K::Char('c') {
-        app.go(Tab::Activity);
-        app.activity.section = activity::Section::Requests;
+        activity::open_all(app);
         return;
     }
     if app.overview.connections_focus {
         let n = connections(app).len();
         match k.code {
             K::Down | K::Char('j') => {
-                app.activity.paused = true;
+                app.pause_activity();
                 app.overview.connection = (app.overview.connection + 1).min(n.saturating_sub(1));
             }
             K::Up | K::Char('k') => {
-                app.activity.paused = true;
+                app.pause_activity();
                 app.overview.connection = app.overview.connection.saturating_sub(1);
             }
             K::PageDown => {
-                app.activity.paused = true;
+                app.pause_activity();
                 app.overview.connection = (app.overview.connection + 8).min(n.saturating_sub(1));
             }
             K::PageUp => {
-                app.activity.paused = true;
+                app.pause_activity();
                 app.overview.connection = app.overview.connection.saturating_sub(8);
             }
             K::Enter | K::Char('r') => {
-                app.activity.paused = true;
+                app.pause_activity();
                 if let Some(c) = connections(app)
                     .get(app.overview.connection)
                     .map(|e| e.c.clone())
@@ -167,7 +170,7 @@ pub fn title(label: &str, right: &str, width: u16, focused: bool) -> Line<'stati
             }),
         ),
         Span::styled(
-            format!(" {} ", "─".repeat((width as usize).saturating_sub(used))),
+            " ".repeat((width as usize).saturating_sub(used) + 2),
             theme::s(theme::faint()),
         ),
         Span::styled(right, theme::s(theme::dim())),
@@ -176,13 +179,13 @@ pub fn title(label: &str, right: &str, width: u16, focused: bool) -> Line<'stati
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let area = area.inner(ratatui::layout::Margin {
         horizontal: 2,
-        vertical: 1,
+        vertical: 0,
     });
     if area.height < 15 && app.overview.connections_focus {
         return draw_connections(f, area, app);
     }
     let status_height = if ready(app) {
-        3 + u16::from(!app.snap.selection_recovery.is_empty()) + u16::from(needs_recovery(app))
+        2 + u16::from(!app.snap.selection_recovery.is_empty()) + u16::from(needs_recovery(app))
     } else {
         4
     };
@@ -200,17 +203,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Min(30),
         ])
         .areas(body);
-        let [g, _, t, _] = Layout::vertical([
-            Constraint::Length(
-                (groups(app).len() as u16 + 1).clamp(3, left.height.saturating_sub(7).max(3)),
-            ),
-            Constraint::Length(1),
-            Constraint::Length(5),
-            Constraint::Min(0),
-        ])
-        .areas(left);
-        draw_groups(f, g, app);
-        draw_traffic(f, t, app);
+        draw_groups(f, left, app);
         draw_connections(f, right, app);
     } else {
         let g_height = (groups(app).len() as u16 + 1)
@@ -249,7 +242,6 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let s = &app.snap;
-    let live = s.connected && s.api_ready && app.snapshot_at.elapsed().as_secs() < 6;
     let capture = if !s.connected {
         "Stopped · no active capture"
     } else if needs_recovery(app) {
@@ -262,19 +254,6 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         "System proxy not verified"
     } else {
         "Proxy ports · apps must opt in"
-    };
-    let traffic = if live && s.status.traffic_available {
-        format!(
-            "↓ {}   ↑ {}",
-            text::rate(s.status.downlink),
-            text::rate(s.status.uplink)
-        )
-    } else if !s.connected {
-        "—".into()
-    } else if !live {
-        "Unavailable · waiting for core".into()
-    } else {
-        "Waiting for samples".into()
     };
     let check = &s.connectivity;
     let checked = check.checked_at > 0;
@@ -308,11 +287,6 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
             },
         ),
         kv(
-            "Traffic",
-            traffic,
-            if live { theme::accent() } else { theme::dim() },
-        ),
-        kv(
             "Last check",
             result,
             if checked && check.state != "passed" {
@@ -333,52 +307,6 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         ));
     }
     f.render_widget(Paragraph::new(lines), area);
-}
-fn draw_traffic(f: &mut Frame, area: Rect, app: &App) {
-    let [head, spark, foot] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(area);
-    f.render_widget(
-        Paragraph::new(title("Traffic", "sampled / combined", area.width, false)),
-        head,
-    );
-    let live = app.snap.connected
-        && app.snap.api_ready
-        && app.snap.status.traffic_available
-        && app.snapshot_at.elapsed().as_secs() < 6;
-    if live && !app.traffic.is_empty() {
-        let data: Vec<u64> = app
-            .traffic
-            .iter()
-            .rev()
-            .take(spark.width as usize)
-            .rev()
-            .map(|(d, u)| d.saturating_add(*u).max(0) as u64)
-            .collect();
-        f.render_widget(
-            Sparkline::default()
-                .data(&data)
-                .style(theme::s(theme::accent())),
-            spark,
-        );
-        f.render_widget(
-            Paragraph::new(format!(
-                "Session  ↓ {}   ↑ {}",
-                text::bytes(app.snap.status.downlink_total),
-                text::bytes(app.snap.status.uplink_total)
-            ))
-            .style(theme::s(theme::dim())),
-            foot,
-        );
-    } else {
-        f.render_widget(
-            Paragraph::new("No live traffic sample").style(theme::s(theme::dim())),
-            spark,
-        );
-    }
 }
 fn draw_groups(f: &mut Frame, area: Rect, app: &App) {
     let tags = groups(app);
@@ -434,7 +362,7 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![title(
         "Connections",
         if app.activity.paused {
-            "Paused · Space live"
+            "Browsing · Space live"
         } else {
             "c Activity"
         },
@@ -488,7 +416,7 @@ fn draw_connections(f: &mut Frame, area: Rect, app: &App) {
             format!(
                 "{} observed · sample {}",
                 rows.len(),
-                text::age(crate::model::now().saturating_sub(app.history.observed_at))
+                text::age(crate::model::now().saturating_sub(app.observation_view().observed_at))
             ),
             theme::s(theme::dim()),
         ));

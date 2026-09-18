@@ -193,3 +193,25 @@ pub fn dns_action(rule: &Value) -> (String, String) {
         rule["server"].as_str().unwrap_or("").to_string(),
     )
 }
+
+/// A readable action label; native identifiers remain visible in details/editors.
+pub fn route_matcher(store: &Store, rule: &Value) -> String {
+    match matcher(store, rule).as_str() {
+        "everything" => "All connections".into(),
+        "protocol dns" => "DNS traffic".into(),
+        other => other.into(),
+    }
+}
+
+pub fn route_action_label(rule: &Value) -> &str {
+    match rule["action"].as_str().unwrap_or("route") {
+        "sniff" => "Detect protocol",
+        "hijack-dns" => "Handle DNS",
+        "resolve" => "Resolve destination",
+        "route-options" => "Set routing options",
+        "route" => "Route",
+        "bypass" => "Bypass",
+        "reject" => "Reject",
+        other => other,
+    }
+}

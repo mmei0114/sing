@@ -63,11 +63,12 @@ pub fn help(_: &App) -> TextView {
          Always available\n\
          s Start / Stop   m Mode   t TUN   : Config   A Review & Apply\n\n\
          Lists\n\
-         ↑↓ or j/k move   Enter opens   [/] changes section\n\
+         ↑↓ or j/k move   Enter opens   ←/→ changes section\n\
          n new   e edit   x remove   J/K reorder where available\n\n\
          Activity\n\
          o sorts by recency / traffic. / filters. r creates or extends a local rule.\n\
-         Browsing pauses observations; Space resumes. f configures process discovery.\n\
+         Browsing holds the view; collection continues. Space returns live. f configures process discovery.\n\
+         d toggles the connection detail pane in wide terminals; Enter opens details at any size.\n\
          App names come from connections observed by sing-box; they are not a system-wide process inventory.\n\n\
          Overview: Tab switches groups / connections; c opens Activity; v checks HTTPS.\n\
          p toggles local macOS system proxy. q exits the UI, leaving the core running.\n\n\
