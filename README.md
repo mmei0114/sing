@@ -1,8 +1,6 @@
 # sing
 
-### A network proxy for your terminal.
-
-**Choose where your traffic goes. See how it gets there.**
+### A network proxy built in the terminal.
 
 [![CI](https://github.com/mmei0114/sing/actions/workflows/ci.yml/badge.svg)](https://github.com/mmei0114/sing/actions/workflows/ci.yml)
 [![Source preview](https://img.shields.io/badge/source_preview-0.6.4--dev-c4adf0)](https://github.com/mmei0114/sing/tree/main)

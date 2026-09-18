@@ -15,7 +15,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "A network proxy for your terminal, powered by sing-box. Run without arguments to open sing."
+    about = "A network proxy built in the terminal, powered by sing-box."
 )]
 struct Args {
     #[arg(long, help = "Private application data directory")]
