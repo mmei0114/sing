@@ -59,6 +59,8 @@ Press `i` on Overview or Policies. Supported sources include share links, URL su
 
 Check the preview and warnings before saving. In **Policies → Sources**, select a subscription and press `u` to fetch an update, then confirm the preview. Saved updates affect the draft; press `A` when ready to load them. There is no scheduled refresh in this preview.
 
+Press `x` on a source to remove it with confirmation. Node sources remove their imported nodes; rule sources remove their corresponding rule set. If the source is still used by groups, routing, DNS or TUN, sing lists the references to change first. Deletion does not cascade into dependent groups or rules. Save affects the draft; `A` applies it to the running core.
+
 ### Create a group
 
 Open **Policies → Groups**, press `n`, and choose **Manual** (selector) or **Automatic** (urltest). In the shared editor, set a unique `tag`, choose the `outbounds` members, and set the manual default or automatic test options. Save with `F2` or `Ctrl+S`, then Review & Apply.
@@ -82,7 +84,7 @@ The importer recognizes supported **Quantumult X, Clash, domain and IP lists**, 
 
 Native JSON source conditions stay native. Binary `.srs` resources remain references loaded by the core; native rule-set definitions can also be edited in **Config → route → rule_set**. Remote native resource download/cache/update options belong to sing-box. Refresh converted sources with `u` in Policies → Sources.
 
-New imported rules are placed before the first terminal routing action. Check ordering afterwards: earlier rules can take precedence. `J` / `K` move the selected rule, `e` edits, `n` creates, and `x` removes with confirmation. Save does not alter the running core until Apply.
+New imported rules are placed before the first terminal routing action. Check ordering afterwards: earlier rules can take precedence. Hold `Alt` (`Option` on Mac) and press Up/Down to move the selected rule; release Alt to browse normally. Each accepted move saves to the draft and selection follows the rule. `A` reviews and applies the new order. `e` edits, `n` creates, and `x` removes with confirmation. The former `J` / `K` reorder shortcuts have been removed.
 
 ### Correct a connection's route
 
@@ -145,7 +147,7 @@ Forms retain unknown sibling fields. Full JSON covers fields without dedicated c
 | `n` / `e` / `x` in editable lists | New / edit / remove |
 | `R` in Policies | Import rule set |
 | `u` in Policies → Sources | Update selected source |
-| `J` / `K` in Rules | Reorder |
+| Alt + Up / Down in Rules | Reorder selected rule (Option on Mac) |
 | Tab on Overview | Switch group/connection focus |
 | `c` / `v` on Overview | Open Activity / connectivity check |
 | `/` / `o` in Activity | Filter / sort |

@@ -64,7 +64,7 @@ pub fn help(_: &App) -> TextView {
          s Start / Stop   m Mode   t TUN   : Config   A Review & Apply\n\n\
          Lists\n\
          ↑↓ or j/k move   Enter opens   ←/→ changes section\n\
-         n new   e edit   x remove   J/K reorder where available\n\n\
+         n new   e edit   x remove   Alt+↑↓ reorder (Option on Mac)\n\n\
          Activity\n\
          o sorts by recency / traffic. / filters. r creates or extends a local rule.\n\
          Browsing holds the view; collection continues. Space returns live. f configures process discovery.\n\

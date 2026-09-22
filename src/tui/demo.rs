@@ -305,6 +305,21 @@ impl Demo {
                 native::write(&mut self.store, e)?;
                 reply(true, "Saved to draft (demo)")
             }
+            Action::Delete(id) => {
+                let mut next = self.store.clone();
+                next.subscriptions.retain(|s| s.id != id);
+                next.nodes.retain(|n| n.provider != id);
+                if !next
+                    .nodes
+                    .iter()
+                    .any(|n| Some(&n.id) == next.selected.as_ref())
+                {
+                    next.selected = next.nodes.first().map(|n| n.id.clone());
+                }
+                native::reconcile(&self.store, &mut next)?;
+                self.store = next;
+                reply(true, "Source removed (demo)")
+            }
             Action::WriteGroup(change) => {
                 native::write_group(&mut self.store, change)?;
                 reply(true, "Group saved (demo)")

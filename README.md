@@ -3,7 +3,7 @@
 ### A network proxy built in the terminal.
 
 [![CI](https://github.com/mmei0114/sing/actions/workflows/ci.yml/badge.svg)](https://github.com/mmei0114/sing/actions/workflows/ci.yml)
-[![Source preview](https://img.shields.io/badge/source_preview-0.6.4--dev-c4adf0)](https://github.com/mmei0114/sing/tree/main)
+[![Source preview](https://img.shields.io/badge/source_preview-0.6.4--dev-b69af7)](https://github.com/mmei0114/sing/tree/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 sing brings rule-based proxying, application-aware routing and connection monitoring to the terminal. Import your subscriptions, organize proxies into groups, and decide which traffic connects directly or uses a proxy—all in a keyboard-first interface.

@@ -69,6 +69,21 @@ fn count(app: &App) -> usize {
 pub fn key(app: &mut App, k: KeyEvent) {
     let section_i = app.proxies.section.index();
     let n = count(app);
+    if app.proxies.section == Section::Rules {
+        if let Some(down) = editor::reorder_direction(k) {
+            let i = app.proxies.selected[section_i];
+            editor::shift(
+                app,
+                "/route/rules",
+                i,
+                down,
+                Box::new(move |app, moved| {
+                    app.proxies.selected[section_i] = moved;
+                }),
+            );
+            return;
+        }
+    }
     match k.code {
         K::Char(']') | K::Right => {
             app.proxies.section = Section::ALL[(section_i + 1) % Section::ALL.len()]
@@ -145,23 +160,115 @@ pub fn key(app: &mut App, k: KeyEvent) {
                 editor::remove(app, "/route/rules", i, labels::matcher(&app.snap.store, v));
             }
         }
-        K::Char('J') if app.proxies.section == Section::Rules => {
-            let i = app.proxies.selected[section_i];
-            if i + 1 < rules(app).len() {
-                editor::shift(app, "/route/rules", i, true);
-                app.proxies.selected[section_i] += 1;
-            }
-        }
-        K::Char('K') if app.proxies.section == Section::Rules => {
-            let i = app.proxies.selected[section_i];
-            if i > 0 {
-                editor::shift(app, "/route/rules", i, false);
-                app.proxies.selected[section_i] -= 1;
-            }
-        }
         K::Char('u') if app.proxies.section == Section::Sources => refresh_source(app),
+        K::Char('x') if app.proxies.section == Section::Sources => remove_source(app),
         _ => {}
     }
+}
+
+fn source_in_use(app: &mut App, name: &str, mut uses: Vec<String>) -> bool {
+    if uses.is_empty() {
+        return false;
+    }
+    uses.sort();
+    uses.dedup();
+    app.push(modal::TextView::plain(
+        "Source is in use",
+        &format!(
+            "{name}\n\nChange or remove these references before deleting this source:\n\n{}\n\nNothing has been deleted.",
+            uses.join("\n")
+        ),
+    ));
+    true
+}
+
+fn source_removed(app: &mut App, reply: crate::runtime::Reply) {
+    if !reply.ok {
+        return notify(app, reply);
+    }
+    app.proxies.selected[Section::Sources.index()] = 0;
+    app.toast("Source removed from draft · A applies");
+}
+
+fn remove_source(app: &mut App) {
+    if app.snap.store.native.is_none() {
+        return app.error("Initialize native configuration before removing sources.");
+    }
+    let i = app.proxies.selected[Section::Sources.index()];
+    if let Some(s) = app.snap.store.subscriptions.get(i).cloned() {
+        let nodes: Vec<_> = app
+            .snap
+            .store
+            .nodes
+            .iter()
+            .filter(|n| n.provider == s.id)
+            .collect();
+        let node_count = nodes.len();
+        let mut uses: Vec<String> = nodes
+            .iter()
+            .flat_map(|n| {
+                native::reference_paths(app.doc(), &n.tag())
+                    .into_iter()
+                    .map(|p| format!("{}: {p}", n.name))
+            })
+            .collect();
+        if nodes
+            .iter()
+            .any(|n| n.tag() == app.snap.store.settings.global_target)
+        {
+            uses.push("Global mode target: choose another target in Mode first".into());
+        }
+        if source_in_use(app, &s.name, uses) {
+            return;
+        }
+        app.push(modal::Confirm::new(
+            "Remove node source?",
+            format!("{}\n\nRemove this subscription and its {node_count} nodes from the draft.\nThe running core stays unchanged until Apply.", s.name),
+            "Remove",
+            Box::new(move |app| app.request(Action::Delete(s.id), Box::new(source_removed))),
+        ).danger());
+        return;
+    }
+    let Some(resource) = app
+        .snap
+        .store
+        .rule_resources
+        .get(i.saturating_sub(app.snap.store.subscriptions.len()))
+        .cloned()
+    else {
+        return;
+    };
+    let tag = resource.tag();
+    let uses = native::links::links(app.doc())
+        .into_iter()
+        .filter(|l| l.kind == native::links::ObjectKind::RuleSet && l.tag == tag)
+        .map(|l| l.path)
+        .collect();
+    if source_in_use(app, &resource.name, uses) {
+        return;
+    }
+    app.push(modal::Confirm::new(
+        "Remove rule source?",
+        format!("{}\n\nRemove this source and its rule set from the draft.\nThe running core stays unchanged until Apply.", resource.name),
+        "Remove",
+        Box::new(move |app| {
+            app.request(Action::ReadNative("/route/rule_set".into()), Box::new(move |app, r| {
+                let Some(mut edit) = r.edit.filter(|_| r.ok) else {
+                    return app.error(r.message);
+                };
+                let Some(items) = edit.value.as_array_mut() else {
+                    return app.error("Rule sets are unavailable. Reopen Sources.");
+                };
+                // Resolve the stable tag again: another interface may have reordered the list.
+                let Some(index) = items.iter().position(|v| native::tag(v) == tag) else {
+                    return app.error("This rule set no longer exists. Reopen Sources.");
+                };
+                items.remove(index);
+                // The manager rechecks references and the revision before saving atomically.
+                app.request(Action::WriteNative(edit), Box::new(source_removed));
+            }));
+        }),
+    ).danger());
 }
 
 fn refresh_source(app: &mut App) {
@@ -446,14 +553,15 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
         ],
         Section::Rules => vec![
             ("↑↓", "rule"),
+            ("Alt+↑↓", "reorder"),
             ("enter", "edit"),
             ("n", "new rule"),
             ("R", "import rule set"),
-            ("J/K", "move"),
         ],
         Section::Sources => vec![
             ("↑↓", "source"),
             ("u", "update"),
+            ("x", "remove"),
             ("i", "import nodes"),
             ("R", "import rules"),
         ],

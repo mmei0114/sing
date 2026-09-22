@@ -12,7 +12,7 @@ use crate::{
     native::{self, Edit, GroupChange},
     runtime::Action,
 };
-use crossterm::event::{KeyCode as K, KeyEvent};
+use crossterm::event::{KeyCode as K, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
@@ -900,6 +900,13 @@ impl Modal for ObjectList {
     any!();
     fn key(&mut self, app: &mut App, k: KeyEvent) -> Outcome {
         let n = self.items.len();
+        if let Some(down) = reorder_direction(k) {
+            if let Some(to) = adjacent(self.selected, n, down) {
+                self.items.swap(self.selected, to);
+                self.selected = to;
+            }
+            return Outcome::Stay;
+        }
         if modal::is_save(&k) {
             (self.on_done)(app, self.items.clone());
             return Outcome::Close;
@@ -920,14 +927,6 @@ impl Modal for ObjectList {
             }
             K::Down | K::Char('j') => self.selected = (self.selected + 1).min(n.saturating_sub(1)),
             K::Up | K::Char('k') => self.selected = self.selected.saturating_sub(1),
-            K::Char('J') if self.selected + 1 < n => {
-                self.items.swap(self.selected, self.selected + 1);
-                self.selected += 1;
-            }
-            K::Char('K') if self.selected > 0 => {
-                self.items.swap(self.selected, self.selected - 1);
-                self.selected -= 1;
-            }
             K::Char('x') | K::Delete if n > 0 => {
                 self.items.remove(self.selected);
                 self.selected = self.selected.min(self.items.len().saturating_sub(1));
@@ -1038,7 +1037,7 @@ impl Modal for ObjectList {
             ("enter", "edit"),
             ("n", "new"),
             ("x", "remove"),
-            ("J/K", "move"),
+            ("Alt+↑↓", "reorder"),
             ("e", "JSON"),
             ("^S", "keep"),
             ("esc", "cancel"),
@@ -1245,27 +1244,73 @@ pub fn remove(app: &mut App, list: &'static str, index: usize, what: String) {
     );
 }
 
-/// Swap item `index` with its neighbour.
-pub fn shift(app: &mut App, list: &'static str, index: usize, down: bool) {
-    app.request(
+/// The arrow event includes Alt/Option, so no held-key or release tracking is needed.
+pub fn reorder_direction(k: KeyEvent) -> Option<bool> {
+    if k.modifiers != KeyModifiers::ALT || k.kind == KeyEventKind::Release {
+        return None;
+    }
+    match k.code {
+        K::Down => Some(true),
+        K::Up => Some(false),
+        _ => None,
+    }
+}
+
+fn adjacent(index: usize, len: usize, down: bool) -> Option<usize> {
+    if index >= len {
+        return None;
+    }
+    let to = if down {
+        index.checked_add(1)?
+    } else {
+        index.checked_sub(1)?
+    };
+    (to < len).then_some(to)
+}
+
+pub type Moved = Box<dyn FnOnce(&mut App, usize)>;
+/// Save one swap atomically; advance selection only after the manager accepts it.
+pub fn shift(app: &mut App, list: &'static str, index: usize, down: bool, moved: Moved) {
+    let observed = native::array(app.doc(), list).to_vec();
+    let Some(to) = adjacent(index, observed.len(), down) else {
+        return;
+    };
+    if app.busy.is_some() || app.moving_rule {
+        return;
+    }
+    // Lock immediately, including the interval before the read/write jobs are dispatched.
+    app.moving_rule = true;
+    app.busy = Some(("Moving rule".into(), std::time::Instant::now()));
+    app.request_busy(
         Action::ReadNative(list.into()),
+        "Moving rule",
         Box::new(move |app, r| {
+            app.moving_rule = false;
             let Some(mut edit) = r.edit.filter(|_| r.ok) else {
                 return app.error(r.message);
             };
             let Some(items) = edit.value.as_array_mut() else {
-                return;
+                return app.error("The rule list is unavailable. Reopen it before moving rules.");
             };
-            let j = if down {
-                index + 1
-            } else {
-                index.wrapping_sub(1)
-            };
-            if index >= items.len() || j >= items.len() {
-                return;
+            // Read unredacted values, but compare using the same redaction as the UI snapshot.
+            if crate::config::redacted(&json!(items)) != json!(observed) {
+                return app.error("Rules changed. Select the rule again before moving it.");
             }
-            items.swap(index, j);
-            app.send(Action::WriteNative(edit));
+            items.swap(index, to);
+            app.moving_rule = true;
+            app.busy = Some(("Moving rule".into(), std::time::Instant::now()));
+            app.request_busy(
+                Action::WriteNative(edit),
+                "Moving rule",
+                Box::new(move |app, r| {
+                    app.moving_rule = false;
+                    if r.ok {
+                        moved(app, to);
+                    } else {
+                        app.error(r.message);
+                    }
+                }),
+            );
         }),
     );
 }

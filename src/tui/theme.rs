@@ -1,4 +1,5 @@
-//! Ink violet, soft white and restrained lavender. Truecolor where supported;
+//! Obsidian: near-black surfaces, soft white text and focused violet accents.
+//! Truecolor where supported;
 //! 256-color entries elsewhere (Terminal.app, tmux without RGB).
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -23,40 +24,40 @@ fn c(pair: (Color, Color)) -> Color {
 }
 
 pub fn accent() -> Color {
-    c(pick((196, 173, 240), 183))
+    c(pick((182, 154, 247), 147))
 }
 pub fn text() -> Color {
-    c(pick((229, 225, 237), 254))
+    c(pick((222, 222, 231), 253))
 }
 pub fn dim() -> Color {
-    c(pick((158, 151, 174), 247))
+    c(pick((161, 161, 181), 248))
 }
 pub fn faint() -> Color {
-    c(pick((130, 120, 148), 244))
+    c(pick((147, 147, 166), 248))
 }
 pub fn good() -> Color {
-    c(pick((156, 202, 172), 150))
+    c(pick((159, 196, 168), 151))
 }
 pub fn warn() -> Color {
-    c(pick((231, 192, 130), 180))
+    c(pick((223, 188, 131), 180))
 }
 pub fn bad() -> Color {
-    c(pick((235, 145, 162), 211))
+    c(pick((234, 146, 166), 181))
 }
 pub fn info() -> Color {
-    c(pick((162, 180, 224), 146))
+    c(pick((169, 181, 214), 146))
 }
 pub fn violet() -> Color {
-    c(pick((186, 169, 208), 182))
+    c(pick((177, 167, 201), 146))
 }
 pub fn selection() -> Color {
-    c(pick((52, 43, 70), 237))
+    c(pick((48, 42, 67), 237))
 }
 pub fn panel() -> Color {
-    c(pick((31, 26, 43), 235))
+    c(pick((30, 30, 39), 235))
 }
 pub fn background() -> Color {
-    c(pick((23, 19, 32), 234))
+    c(pick((21, 21, 27), 234))
 }
 
 pub fn s(fg: Color) -> Style {

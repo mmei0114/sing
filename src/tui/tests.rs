@@ -250,6 +250,321 @@ fn unidentified_app_cannot_silently_become_a_domain_rule() {
 }
 
 #[test]
+fn alt_arrows_move_the_same_rule_in_both_workspaces_without_applying() {
+    for in_config in [false, true] {
+        let mut app = demo_app();
+        if in_config {
+            app.key(key(KeyCode::Char(':')));
+            app.paste("route");
+            app.key(key(KeyCode::Enter));
+        } else {
+            app.go(Tab::Proxies);
+            app.key(key(KeyCode::Right));
+        }
+        app.drain();
+        assert!(screen(&app, 80, 24).contains("Alt+↑↓ reorder"));
+        let initial = app.doc().clone();
+        let original = native::array(&initial, "/route/rules").to_vec();
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        app.key(up); // The first rule cannot move upwards.
+        assert!(app.outbox.is_empty() && app.busy.is_none());
+        app.key(down);
+        assert!(app.busy.is_some());
+        assert_eq!(app.doc(), &initial);
+        app.drain();
+        let mut repeated = down;
+        repeated.kind = event::KeyEventKind::Repeat;
+        app.key(repeated);
+        app.drain();
+        assert_eq!(app.doc()["route"]["rules"][2], original[0]);
+        assert_eq!(app.doc()["route"]["rules"][0], original[1]);
+        assert_eq!(app.doc()["outbounds"], initial["outbounds"]);
+        assert_eq!(app.doc()["dns"], initial["dns"]);
+        assert!(app.snap.connected && app.snap.dirty);
+        app.key(up);
+        app.drain();
+        assert_eq!(app.doc()["route"]["rules"][1], original[0]);
+        let reordered = app.doc().clone();
+        // Releasing Alt restores navigation; J/K no longer reorder.
+        for k in [
+            key(KeyCode::Down),
+            key(KeyCode::Up),
+            key(KeyCode::Char('J')),
+            key(KeyCode::Char('K')),
+        ] {
+            app.key(k);
+        }
+        let mut released = down;
+        released.kind = event::KeyEventKind::Release;
+        app.key(released);
+        assert_eq!(app.doc(), &reordered);
+        assert!(app.outbox.is_empty());
+        for _ in 0..original.len() {
+            app.key(key(KeyCode::Down));
+        }
+        app.key(down); // No wraparound at the bottom.
+        assert!(app.outbox.is_empty() && app.busy.is_none());
+    }
+}
+
+fn finish_demo_job(app: &mut App) {
+    let (action, then, _) = app.outbox.pop_front().unwrap();
+    let mut demo = app.demo.take().unwrap();
+    let reply = demo.handle(app, action);
+    app.demo = Some(demo);
+    app.finish(reply, then);
+}
+
+#[test]
+fn reorder_serializes_pending_moves_and_rejects_concurrent_edits() {
+    for before_read in [true, false] {
+        let mut app = demo_app();
+        app.go(Tab::Proxies);
+        app.key(key(KeyCode::Right));
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        app.key(down);
+        // A previously queued, unrelated reply must not unlock the reorder operation.
+        let unrelated: Reply =
+            serde_json::from_value(json!({"ok":true,"message":"","needs_auth":false})).unwrap();
+        app.finish(unrelated, Box::new(|_, _| {}));
+        app.key(down); // A pending move cannot target a second, stale index.
+        assert_eq!(app.outbox.len(), 1);
+        assert_eq!(app.proxies.selected[1], 0);
+        if !before_read {
+            finish_demo_job(&mut app);
+        }
+        let mut demo = app.demo.take().unwrap();
+        let mut edit = demo
+            .handle(&app, Action::ReadNative("/route/rules".into()))
+            .edit
+            .unwrap();
+        edit.value
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"domain":["new.invalid"],"outbound":"direct"}));
+        assert!(demo.handle(&app, Action::WriteNative(edit)).ok);
+        let other_edit = demo.snapshot().store.native.unwrap();
+        app.demo = Some(demo);
+        finish_demo_job(&mut app);
+        assert!(app.busy.is_none() && !app.moving_rule && app.outbox.is_empty());
+        assert_eq!(app.proxies.selected[1], 0);
+        assert_eq!(app.doc(), &other_edit);
+        assert!(app
+            .toast
+            .as_ref()
+            .is_some_and(|t| t.error && t.text.contains("changed")));
+    }
+}
+
+#[test]
+fn moving_rules_preserves_unredacted_fields_and_empty_lists_are_safe() {
+    let mut app = demo_app();
+    let mut demo = app.demo.take().unwrap();
+    let mut edit = demo
+        .handle(&app, Action::ReadNative("/route/rules".into()))
+        .edit
+        .unwrap();
+    edit.value[0]["future"] = json!({"secret":"fictional-test-value","other":17});
+    assert!(demo.handle(&app, Action::WriteNative(edit)).ok);
+    app.observe(demo.snapshot());
+    app.demo = Some(demo);
+    app.go(Tab::Proxies);
+    app.key(key(KeyCode::Right));
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    app.drain();
+    let mut demo = app.demo.take().unwrap();
+    let mut edit = demo
+        .handle(&app, Action::ReadNative("/route/rules".into()))
+        .edit
+        .unwrap();
+    assert_eq!(
+        edit.value[1]["future"],
+        json!({"secret":"fictional-test-value","other":17})
+    );
+    edit.value = json!([]);
+    assert!(demo.handle(&app, Action::WriteNative(edit)).ok);
+    app.observe(demo.snapshot());
+    app.demo = Some(demo);
+    for code in [KeyCode::Up, KeyCode::Down] {
+        app.key(KeyEvent::new(code, KeyModifiers::ALT));
+    }
+    assert!(app.outbox.is_empty() && app.busy.is_none());
+}
+
+#[test]
+fn nested_rule_lists_use_alt_arrows_and_keep_edits_local_until_saved() {
+    use std::{cell::RefCell, rc::Rc};
+    let mut app = demo_app();
+    let original = app.doc().clone();
+    let values = vec![
+        json!({"domain":["first.invalid"]}),
+        json!({"domain":["second.invalid"]}),
+    ];
+    let saved = Rc::new(RefCell::new(Vec::new()));
+    let output = saved.clone();
+    app.push(editor::ObjectList::new(
+        schema::Object::RouteRule,
+        "Rules",
+        values.clone(),
+        Box::new(move |_, v| {
+            *output.borrow_mut() = v;
+        }),
+    ));
+    for code in [KeyCode::Char('J'), KeyCode::Char('K')] {
+        app.key(key(code));
+    }
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!(app.doc(), &original);
+    assert!(saved.borrow().is_empty());
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(*saved.borrow(), vec![values[1].clone(), values[0].clone()]);
+    assert!(app.modals.is_empty() && app.outbox.is_empty());
+}
+
+#[test]
+fn node_source_removal_checks_references_confirms_and_leaves_core_running() {
+    let mut app = demo_app();
+    app.go(Tab::Proxies);
+    app.key(key(KeyCode::Left));
+    app.key(key(KeyCode::Char('x')));
+    assert!(screen(&app, 100, 28).contains("Source is in use"));
+    assert!(app.outbox.is_empty());
+    app.key(key(KeyCode::Esc));
+
+    // Move the source's users to another member before trying to delete it.
+    let mut demo = app.demo.take().unwrap();
+    let mut edit = demo
+        .handle(&app, Action::ReadNative("/outbounds".into()))
+        .edit
+        .unwrap();
+    for v in edit.value.as_array_mut().unwrap() {
+        if labels::is_group(v) {
+            v["outbounds"] = json!(["direct"]);
+            if v.get("default").is_some() {
+                v["default"] = json!("direct");
+            }
+        }
+    }
+    assert!(demo.handle(&app, Action::WriteNative(edit)).ok);
+    app.observe(demo.snapshot());
+    app.demo = Some(demo);
+    let before = serde_json::to_value(&app.snap.store).unwrap();
+    let policies = app.doc()["route"].clone();
+    app.key(key(KeyCode::Char('x')));
+    assert!(screen(&app, 100, 28).contains("Remove node source?"));
+    app.key(key(KeyCode::Enter)); // Dangerous confirmations default to Cancel.
+    app.drain();
+    assert_eq!(serde_json::to_value(&app.snap.store).unwrap(), before);
+    app.key(key(KeyCode::Char('x')));
+    app.key(key(KeyCode::Char('y')));
+    app.drain();
+    assert!(app.snap.store.subscriptions.is_empty());
+    assert!(app.snap.store.nodes.is_empty());
+    assert_eq!(app.doc()["route"], policies);
+    assert!(app.snap.connected && app.snap.dirty);
+}
+
+fn rule_source_app() -> App {
+    let mut app = demo_app();
+    app.demo = None;
+    app.snap
+        .store
+        .rule_resources
+        .push(crate::model::RuleResource {
+            id: "video".into(),
+            name: "Video rules".into(),
+            source: "fixture".into(),
+            format: "qx".into(),
+            updated_at: 0,
+            digest: String::new(),
+            input_count: 1,
+            rules: vec![],
+            native_document: None,
+            warnings: vec![],
+        });
+    app.snap.store.native.as_mut().unwrap()["route"]["rule_set"] = json!([
+        {"type":"inline","tag":"rs-video","rules":[{"domain_suffix":["video.invalid"]}]}
+    ]);
+    app.go(Tab::Proxies);
+    app.key(key(KeyCode::Left));
+    app.proxies.selected[2] = app.snap.store.subscriptions.len();
+    app
+}
+
+#[test]
+fn rule_source_removal_checks_route_dns_and_tun_references() {
+    for (pointer, value) in [
+        (
+            "/route/rules",
+            json!([{"rule_set":["rs-video"],"outbound":"proxy"}]),
+        ),
+        (
+            "/dns/rules",
+            json!([{"rule_set":["rs-video"],"server":"bootstrap"}]),
+        ),
+        (
+            "/inbounds",
+            json!([{"type":"tun","tag":"tun","route_address_set":["rs-video"]}]),
+        ),
+    ] {
+        let mut app = rule_source_app();
+        native::set(app.snap.store.native.as_mut().unwrap(), pointer, value).unwrap();
+        app.key(key(KeyCode::Char('x')));
+        let view = screen(&app, 100, 28);
+        assert!(view.contains("Source is in use"), "{view}");
+        assert!(view.contains(pointer), "{view}");
+        assert!(app.outbox.is_empty());
+    }
+}
+
+#[test]
+fn rule_source_removal_resolves_its_tag_after_confirmation_and_preserves_other_sets() {
+    let mut app = rule_source_app();
+    app.key(key(KeyCode::Char('x')));
+    app.key(key(KeyCode::Enter));
+    assert!(app.outbox.is_empty());
+    app.key(key(KeyCode::Char('x')));
+    app.key(key(KeyCode::Char('y')));
+    // Simulate a second interface inserting a rule set while the dialog was open.
+    let other = json!({"type":"inline","tag":"other","rules":[]});
+    app.snap.store.native.as_mut().unwrap()["route"]["rule_set"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, other.clone());
+    let (action, then, _) = app.outbox.pop_front().unwrap();
+    let Action::ReadNative(pointer) = action else {
+        panic!("expected scoped read")
+    };
+    let mut reply: Reply =
+        serde_json::from_value(json!({"ok":true,"message":"","needs_auth":false})).unwrap();
+    reply.edit = Some(native::read(&app.snap.store, pointer).unwrap());
+    app.finish(reply, then);
+    let (action, _, _) = app.outbox.pop_front().unwrap();
+    let Action::WriteNative(edit) = action else {
+        panic!("expected draft save")
+    };
+    assert_eq!(edit.pointer, "/route/rule_set");
+    assert_eq!(edit.value, json!([other]));
+    let original = app.snap.store.clone();
+    let mut changed = original.clone();
+    changed.native.as_mut().unwrap()["route"]["rules"] = json!([
+        {"rule_set":["rs-video"],"outbound":"proxy"}
+    ]);
+    let before = serde_json::to_value(&changed).unwrap();
+    assert!(native::write(&mut changed, edit.clone()).is_err());
+    assert_eq!(serde_json::to_value(&changed).unwrap(), before);
+    native::write(&mut app.snap.store, edit).unwrap();
+    assert!(app.snap.store.rule_resources.is_empty());
+    assert_eq!(app.doc()["route"]["rule_set"], json!([other]));
+    assert_eq!(
+        app.doc()["outbounds"],
+        original.native.unwrap()["outbounds"]
+    );
+    assert!(app.outbox.is_empty());
+}
+
+#[test]
 fn section_navigation_has_no_bracket_hints() {
     let mut app = demo_app();
     for tab in [Tab::Proxies, Tab::Activity] {
@@ -410,7 +725,7 @@ fn rule_labels_are_readable_without_mutating_native_document() {
 }
 
 #[test]
-#[ignore = "Writes fictional renderer snapshots to .build/violet-polish"]
+#[ignore = "Writes fictional renderer snapshots to .build/theme-review"]
 fn render_polish_review() {
     use ratatui::style::{Color, Modifier};
     fn color(c: Color) -> String {
@@ -440,10 +755,10 @@ fn render_polish_review() {
             .replace('"', "&quot;")
     }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        if theme::background() == Color::Rgb(23, 19, 32) {
-            ".build/violet-polish/truecolor"
+        if matches!(theme::background(), Color::Rgb(..)) {
+            ".build/theme-review/truecolor"
         } else {
-            ".build/violet-polish/indexed"
+            ".build/theme-review/indexed"
         },
     );
     std::fs::create_dir_all(&dir).unwrap();

@@ -1,40 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="722" viewBox="0 0 1120 722" role="img" aria-labelledby="title desc">
 <title id="title">sing 0.6.4-dev — real terminal preview</title>
 <desc id="desc">The Overview layout rendered by sing --preview, with simplified documentation colors. Fictional running demo with no real traffic. Three workspaces, live evidence, proxy groups, and fixed Start, Mode and TUN controls.</desc>
-<rect width="1120" height="722" rx="14" fill="#171320"/>
-<path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1f1a2b"/>
-<circle cx="25" cy="21" r="5" fill="#fa7d86"/><circle cx="43" cy="21" r="5" fill="#f2cc72"/><circle cx="61" cy="21" r="5" fill="#78dba9"/>
-<text x="560" y="26" text-anchor="middle" fill="#b4c4dc" font-size="13" font-family="monospace">sing · fictional demo · 110 × 32</text>
-<g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16"><text x="24" y="74" fill="#9e97ae" xml:space="preserve">  SING   1 Overview   2 Policies   3 Activity                            ● Running   ↓ 361 KB/s  ↑ 19.5 KB/s</text>
-<text x="24" y="94" fill="#c4adf0" xml:space="preserve">         ━━━━━━━━━━</text>
-<text x="24" y="114" fill="#e5e1ed" xml:space="preserve">  Capture    Proxy ports · apps must opt in</text>
-<text x="24" y="134" fill="#e5e1ed" xml:space="preserve">  Last check Not checked · v to test</text>
-<text x="24" y="154" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="174" fill="#e5e1ed" xml:space="preserve">  Proxy groups                               live   Connections                                   c Activity</text>
-<text x="24" y="194" fill="#e5e1ed" xml:space="preserve">  ▌Proxy       → Tokyo 01                   60 ms   DESTINATION               POLICY → NODE</text>
-<text x="24" y="214" fill="#e5e1ed" xml:space="preserve">   Streaming   → Singapore                  60 ms    wss-primary.slack.com    Proxy → Tokyo 01</text>
-<text x="24" y="234" fill="#e5e1ed" xml:space="preserve">                                                     weixin.qq.com            Direct</text>
-<text x="24" y="254" fill="#e5e1ed" xml:space="preserve">                                                     github.com               Proxy → Tokyo 01</text>
-<text x="24" y="274" fill="#e5e1ed" xml:space="preserve">                                                     example.com              Proxy → Tokyo 01</text>
-<text x="24" y="294" fill="#e5e1ed" xml:space="preserve">                                                     aod.itunes.apple.com     Proxy → Tokyo 01</text>
-<text x="24" y="314" fill="#e5e1ed" xml:space="preserve">                                                     www.youtube.com          Streaming → Singapore</text>
-<text x="24" y="334" fill="#e5e1ed" xml:space="preserve">                                                     example.com              Proxy → Tokyo 01</text>
-<text x="24" y="354" fill="#e5e1ed" xml:space="preserve">                                                     marketplace.visualstud…  Proxy → Tokyo 01</text>
-<text x="24" y="374" fill="#e5e1ed" xml:space="preserve">                                                    8 observed · sample just now</text>
-<text x="24" y="394" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="414" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="434" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="454" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="474" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="494" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="514" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="534" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="554" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="574" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="594" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="614" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="634" fill="#e5e1ed" xml:space="preserve"></text>
-<text x="24" y="654" fill="#9e97ae" xml:space="preserve"></text>
-<text x="24" y="674" fill="#e5e1ed" xml:space="preserve">  ↑↓ group   enter select   tab connections   l latency   v check</text>
-<text x="24" y="694" fill="#c4adf0" xml:space="preserve"> ● s Stop   m Mode Rule   t TUN Off                                                         : Config   ? Help</text></g>
+<rect width="1120" height="722" rx="14" fill="#15151b"/>
+<path d="M14 0h1092a14 14 0 0 1 14 14v28H0V14A14 14 0 0 1 14 0" fill="#1e1e27"/>
+<circle cx="25" cy="21" r="5" fill="#ea92a6"/><circle cx="43" cy="21" r="5" fill="#dfbc83"/><circle cx="61" cy="21" r="5" fill="#9fc4a8"/>
+<text x="560" y="26" text-anchor="middle" fill="#a1a1b5" font-size="13" font-family="monospace">sing · fictional demo · 110 × 32</text>
+<g font-family="Menlo,Consolas,DejaVu Sans Mono,monospace" font-size="16"><text x="24" y="74" fill="#a1a1b5" xml:space="preserve">  SING   1 Overview   2 Policies   3 Activity                            ● Running   ↓ 640 KB/s  ↑ 31.2 KB/s</text>
+<text x="24" y="94" fill="#b69af7" xml:space="preserve">         ━━━━━━━━━━</text>
+<text x="24" y="114" fill="#dedee7" xml:space="preserve">  Capture    Proxy ports · apps must opt in</text>
+<text x="24" y="134" fill="#dedee7" xml:space="preserve">  Last check Not checked · v to test</text>
+<text x="24" y="154" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="174" fill="#dedee7" xml:space="preserve">  Proxy groups                               live   Connections                                   c Activity</text>
+<text x="24" y="194" fill="#dedee7" xml:space="preserve">  ▌Proxy       → Tokyo 01                   60 ms   DESTINATION               POLICY → NODE</text>
+<text x="24" y="214" fill="#dedee7" xml:space="preserve">   Streaming   → Singapore                  60 ms    news.ycombinator.com     Proxy → Tokyo 01</text>
+<text x="24" y="234" fill="#dedee7" xml:space="preserve">                                                     github.com               Proxy → Tokyo 01</text>
+<text x="24" y="254" fill="#dedee7" xml:space="preserve">                                                     marketplace.visualstud…  Proxy → Tokyo 01</text>
+<text x="24" y="274" fill="#dedee7" xml:space="preserve">                                                     aod.itunes.apple.com     Proxy → Tokyo 01</text>
+<text x="24" y="294" fill="#dedee7" xml:space="preserve">                                                     149.154.167.51           Proxy → Tokyo 01</text>
+<text x="24" y="314" fill="#dedee7" xml:space="preserve">                                                     imap.example.invalid     Direct</text>
+<text x="24" y="334" fill="#dedee7" xml:space="preserve">                                                     www.apple.com            Proxy → Tokyo 01</text>
+<text x="24" y="354" fill="#dedee7" xml:space="preserve">                                                     i.ytimg.com              Streaming → Singapore</text>
+<text x="24" y="374" fill="#dedee7" xml:space="preserve">                                                    8 observed · sample just now</text>
+<text x="24" y="394" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="414" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="434" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="454" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="474" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="494" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="514" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="534" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="554" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="574" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="594" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="614" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="634" fill="#dedee7" xml:space="preserve"></text>
+<text x="24" y="654" fill="#a1a1b5" xml:space="preserve"></text>
+<text x="24" y="674" fill="#dedee7" xml:space="preserve">  ↑↓ group   enter select   tab connections   l latency   v check</text>
+<text x="24" y="694" fill="#b69af7" xml:space="preserve"> ● s Stop   m Mode Rule   t TUN Off                                                         : Config   ? Help</text></g>
 </svg>

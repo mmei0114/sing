@@ -95,6 +95,7 @@ pub struct App {
     pub snapshot_at: Instant,
     // Freeze only the reading surface, never the incoming observation history.
     frozen_history: Option<history::History>,
+    moving_rule: bool,
     outbox: VecDeque<(Action, Then, Option<String>)>,
     pub(crate) pending_auth: Option<(String, Action)>,
 }
@@ -130,6 +131,7 @@ impl App {
             poll_error: String::new(),
             snapshot_at: Instant::now(),
             frozen_history: None,
+            moving_rule: false,
             outbox: VecDeque::new(),
             pending_auth: None,
         }
@@ -281,11 +283,14 @@ impl App {
 
     // ---- keys --------------------------------------------------------------
     pub fn key(&mut self, k: KeyEvent) {
+        if k.kind == event::KeyEventKind::Release {
+            return;
+        }
         if k.code == K::Char('c') && k.modifiers.contains(M::CONTROL) {
             self.quit = true;
             return;
         }
-        if self.busy.is_some() {
+        if self.busy.is_some() || self.moving_rule {
             return;
         }
         if let Some(mut m) = self.modals.pop() {

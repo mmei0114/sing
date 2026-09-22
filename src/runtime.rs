@@ -2847,6 +2847,64 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn deleting_subscription_checks_references_before_changing_memory_or_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = draft_manager(dir.path());
+        let a = dir.path().join("a.txt");
+        fs::write(&a, "trojan://fixture@127.0.0.1:9#A").unwrap();
+        import_fixture(&mut m, &a, "A").await;
+        let id = m.store.subscriptions[0].id.clone();
+        let node = m.store.nodes[0].tag();
+        // A nested group is a dependency even when no terminal route names the node.
+        m.store.native.as_mut().unwrap()["outbounds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"selector","tag":"keep","outbounds":[node],"default":node}));
+        m.store.save(dir.path()).unwrap();
+        let before = serde_json::to_value(&m.store).unwrap();
+        assert!(m
+            .handle(Action::Delete(id.clone()))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("still referenced"));
+        assert_eq!(serde_json::to_value(&m.store).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(Store::load(dir.path()).unwrap()).unwrap(),
+            before
+        );
+        m.store.native.as_mut().unwrap()["outbounds"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|v| native::tag(v) != "keep");
+        for group in m.store.native.as_mut().unwrap()["outbounds"]
+            .as_array_mut()
+            .unwrap()
+        {
+            if ["selector", "urltest"].contains(&group["type"].as_str().unwrap_or("")) {
+                group["outbounds"] = json!(["direct"]);
+                if group.get("default").is_some() {
+                    group["default"] = json!("direct");
+                }
+            }
+        }
+        let route = m.store.native.as_ref().unwrap()["route"].clone();
+        m.handle(Action::Delete(id)).await.unwrap();
+        assert!(m.store.nodes.is_empty() && m.store.subscriptions.is_empty());
+        assert!(
+            !native::array(m.store.native.as_ref().unwrap(), "/outbounds")
+                .iter()
+                .any(|v| native::tag(v) == node)
+        );
+        assert_eq!(m.store.native.as_ref().unwrap()["route"], route);
+        assert_eq!(
+            serde_json::to_value(Store::load(dir.path()).unwrap()).unwrap(),
+            serde_json::to_value(&m.store).unwrap()
+        );
+        assert!(m.child.is_none());
+    }
+
+    #[tokio::test]
     async fn removing_referenced_subscription_nodes_is_a_non_destructive_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let mut m = draft_manager(dir.path());

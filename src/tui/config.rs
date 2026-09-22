@@ -286,6 +286,21 @@ pub fn key(app: &mut App, k: KeyEvent) {
         items(app, s).len()
     };
     let selected = app.config.selected[app.config.section];
+    if s == Section::RouteRules {
+        if let Some(down) = editor::reorder_direction(k) {
+            let section_i = app.config.section;
+            editor::shift(
+                app,
+                "/route/rules",
+                selected,
+                down,
+                Box::new(move |app, moved| {
+                    app.config.selected[section_i] = moved;
+                }),
+            );
+            return;
+        }
+    }
     match k.code {
         K::Esc => app.go(app.last_tab),
         K::Char(']') | K::Right if !siblings(s).is_empty() => {
@@ -332,14 +347,6 @@ pub fn key(app: &mut App, k: KeyEvent) {
         K::Char('x') if s.list() && selected < items(app, s).len() => {
             let (name, _) = item_label(app, s, &items(app, s)[selected], selected);
             editor::remove(app, s.pointer().unwrap(), selected, name);
-        }
-        K::Char('J') if s == Section::RouteRules && selected + 1 < n => {
-            editor::shift(app, "/route/rules", selected, true);
-            app.config.selected[app.config.section] += 1;
-        }
-        K::Char('K') if s == Section::RouteRules && selected > 0 => {
-            editor::shift(app, "/route/rules", selected, false);
-            app.config.selected[app.config.section] -= 1;
         }
         K::Char('r') if s == Section::Core => refresh_cores(app, false),
         K::Char('d') if s == Section::Core => refresh_cores(app, true),
@@ -434,7 +441,7 @@ fn open_json(app: &mut App) {
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let area = area.inner(ratatui::layout::Margin {
         horizontal: 2,
-        vertical: 1,
+        vertical: 0,
     });
     let [nav, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(area);
     let s = section(app);
@@ -594,6 +601,14 @@ pub fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("r", "rescan"),
             ("d", "releases"),
             ("i", "install"),
+            ("esc", "back"),
+        ],
+        Section::RouteRules => vec![
+            ("↑↓", "rule"),
+            ("Alt+↑↓", "reorder"),
+            ("enter", "edit"),
+            ("n", "new"),
+            ("x", "remove"),
             ("esc", "back"),
         ],
         s if s.list() => vec![
