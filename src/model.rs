@@ -276,7 +276,10 @@ impl Store {
     pub fn load(dir: &Path) -> Result<Self> {
         let file = dir.join("state.json");
         if !file.exists() {
-            return Self::new();
+            let mut store = Self::new()?;
+            let doc = crate::native::defaults::document(&store);
+            crate::native::adopt(&mut store, doc)?;
+            return Ok(store);
         }
         let data: Self = serde_json::from_slice(&fs::read(file)?)
             .context("Cannot read saved state; original file was not changed")?;

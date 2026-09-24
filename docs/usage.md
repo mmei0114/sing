@@ -25,7 +25,7 @@ Press `:` for a searchable **Config** popup. Core management and native modules 
 1. Build and run `./sing` using the [README instructions](../README.md#get-started).
 2. Open `:` → **Core**. Press `d` to fetch official releases, then `i` to open the download picker; choose a version with arrows and `Enter`. After downloading, `r` refreshes installed cores and `Enter` selects one. Runtime compatibility is tested with sing-box **1.14.0**; newer versions are not automatically guaranteed compatible.
 3. Return to Overview with `Esc`, press `i`, and paste a subscription URL, share links or a local file path. Review the nodes and **Save to Draft**.
-4. If the profile has not been initialized, press `s` and confirm **Upgrade saved configuration**. This adopts a native draft and creates a private backup, without starting the core. It also applies to fresh profiles in this preview.
+4. Fresh profiles already contain an editable native draft with privacy-oriented DNS defaults. Existing legacy profiles may offer **Upgrade saved configuration**; that migration preserves their settings and creates a private backup without starting the core.
 5. Press `A` → **Apply & Start**. The initial generated configuration includes a `proxy` group for imported nodes. Select it on Overview and press `Enter` to choose its active member. Press `m` for a routing mode.
 6. Choose how applications send traffic to the core, as described below.
 
@@ -117,6 +117,18 @@ If `f` reports **Broken pipe** after upgrading from an earlier build, restart th
 
 ## DNS and native configuration
 
+### First-run DNS defaults
+
+New profiles use Cloudflare DNS over HTTPS (`1.1.1.1`) through the `proxy` group. Ordinary DNS queries have no automatic local/ISP fallback. AliDNS over HTTPS (`223.5.5.5`) is contacted directly to resolve proxy endpoint hostnames and other internal dial addresses using the default domain resolver; `.local` queries use the local resolver. These providers are editable, not mandatory. The initial DNS answer strategy is IPv4-only; this is not an IPv6 traffic firewall.
+
+Node and rule imports do not replace this DNS configuration. The initially empty `proxy` group is populated by the first node import; a profile with an empty group cannot start. DNS continues to use this group even when a site's traffic is routed to another group or Direct mode is selected. Direct website connections also use the proxied resolver by default.
+
+First launch only saves a draft with a loopback proxy listener. It does not start the core, enable TUN or change system DNS. For system-wide capture, enable TUN with `t`, review, then Apply and authorize. New TUN inbounds use automatic routing, strict routing and DNS hijacking; your existing customized inbounds are not rewritten. System Proxy alone does not capture all system DNS, and application-specific encrypted DNS can follow a separate route. These defaults are not a guarantee against every possible leak.
+
+Defaults are applied only when no saved profile exists. Upgrades, subscription refreshes and new traffic rules leave your DNS edits intact.
+
+### Editing DNS
+
 Open `:` and select **dns**. Use Left/Right for **Servers**, **Rules** and **Options**:
 
 - **Servers** define resolvers and their transports, such as local DNS, UDP or HTTPS.
@@ -124,6 +136,8 @@ Open `:` and select **dns**. Use Left/Right for **Servers**, **Rules** and **Opt
 - **Options** include the final resolver and other DNS-wide fields.
 
 DNS routing and traffic routing are separate. A site's traffic can use a proxy while its DNS uses a different path. A proxy server's own hostname also needs resolving; bootstrap/default domain resolvers and a DNS server's `detour` are distinct settings. Avoid making a resolver depend on the very proxy hostname it must resolve. A blank DNS detour uses direct dialing.
+
+On macOS, sing's TUN helper also points enabled physical network services at the TUN DNS address when `auto_route` is on and `dns_mode` is `native` or `hijack`. It checks that the TUN resolver answers before changing system DNS, then restores the previous settings on Stop or an unexpected core exit. This complements the DNS rules in Config; it does not replace them. Recheck DNS when changing networks, adding interfaces, or using a browser with its own secure-DNS setting.
 
 There is no universally fastest DNS preset. Change one part at a time, Apply, and test new connections on your network. See the official [DNS](https://sing-box.sagernet.org/configuration/dns/) and [route](https://sing-box.sagernet.org/configuration/route/) references for the selected core version.
 
@@ -163,7 +177,7 @@ The `[` and `]` keys remain aliases for section navigation, without repeated on-
 
 ## Upgrade safely
 
-The published preview **0.6.3-dev** uses manager protocol **10**. Replacing an executable or reopening the interface does not update an already running manager. Its IPC fix requires restarting an older manager. The **0.6.4-dev** interface refinements keep protocol 10 and need only a UI reopen if the manager is already running the 0.6.3-dev IPC fix.
+The current macOS connection lifecycle uses manager protocol **11**. Replacing an executable or reopening the interface does not update an already running manager. Use the following steps when upgrading so the manager and authorized helper both use the new code.
 
 1. Back up your private data and current executable.
 2. Close interfaces with `q`.
@@ -180,6 +194,8 @@ Default state lives in `~/Library/Application Support/sing` on macOS and `~/.loc
 These directories contain secrets. Git backs up source code, not your subscriptions or runtime state.
 
 If macOS proxy settings need recovery and the interface is unavailable, use `./sing --restore-system-proxy` with the same data directory. It may request administrator authorization. Check errors rather than deleting recovery records or force-killing processes. This command is not a general repair tool for arbitrary TUN routes; retain local/console access when testing TUN.
+
+macOS DNS recovery is part of the normal connection lifecycle. Start saves the previous settings; Stop restores them. If the core or background manager exits unexpectedly, the authorized helper restores DNS automatically and retries temporary failures. If that helper itself was terminated, reopening sing resumes unfinished DNS recovery and requests administrator access if needed. There is no separate DNS recovery command to remember. Closing the interface with `q` leaves a healthy background connection running.
 
 ## Privacy and reporting
 

@@ -41,7 +41,8 @@ fn connections(app: &App) -> Vec<&history::Entry> {
 }
 fn needs_recovery(app: &App) -> bool {
     let p = &app.snap.system_proxy;
-    p.pending_restore && (!app.snap.connected || !p.configured || !p.helper_ready)
+    !app.snap.capture_recovery.is_empty()
+        || (p.pending_restore && (!app.snap.connected || !p.configured || !p.helper_ready))
 }
 pub fn key(app: &mut App, k: KeyEvent) {
     if k.code == K::Tab || k.code == K::BackTab {
@@ -242,7 +243,9 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let s = &app.snap;
-    let capture = if !s.connected {
+    let capture = if !s.capture_recovery.is_empty() {
+        "Network settings need attention"
+    } else if !s.connected {
         "Stopped · no active capture"
     } else if needs_recovery(app) {
         "System proxy needs recovery"
@@ -302,7 +305,11 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     if needs_recovery(app) {
         lines.push(kv(
             "Recovery",
-            ": System proxy · restore before stopping".into(),
+            if !s.capture_recovery.is_empty() {
+                "s Retry connection".into()
+            } else {
+                ": System proxy · restore before stopping".into()
+            },
             theme::warn(),
         ));
     }

@@ -7,6 +7,8 @@ mod runtime;
 mod subscription;
 mod system_proxy;
 mod tui;
+#[cfg(target_os = "macos")]
+mod tun_dns;
 
 use anyhow::Result;
 use clap::Parser;
@@ -69,12 +71,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.tun_helper {
-        return runtime::tun_helper(
-            &dir,
-            args.core
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("Missing --core"))?,
-        );
+        return runtime::tun::run(&dir, args.core.as_deref());
     }
     if args.daemon {
         return runtime::daemon(&dir);
@@ -83,16 +80,18 @@ fn main() -> Result<()> {
         return tui::preview();
     }
     if args.status || args.disconnect || args.shutdown {
-        let response = runtime::request(
-            &dir,
-            if args.shutdown {
-                runtime::Action::Shutdown
-            } else if args.disconnect {
-                runtime::Action::Disconnect
-            } else {
-                runtime::Action::Snapshot
-            },
-        )?;
+        let action = if args.shutdown {
+            runtime::Action::Shutdown
+        } else if args.disconnect {
+            runtime::Action::Disconnect
+        } else {
+            runtime::Action::Snapshot
+        };
+        let mut response = runtime::request(&dir, action.clone())?;
+        if response.needs_auth && response.auth_kind == "tun_recovery" {
+            runtime::tun::authorize_recovery(&dir)?;
+            response = runtime::request(&dir, action)?;
+        }
         println!("{}", serde_json::to_string_pretty(&response)?);
         anyhow::ensure!(response.ok, "{}", response.message);
         return Ok(());

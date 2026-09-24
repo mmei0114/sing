@@ -96,6 +96,7 @@ pub struct App {
     // Freeze only the reading surface, never the incoming observation history.
     frozen_history: Option<history::History>,
     moving_rule: bool,
+    recovery_prompted: bool,
     outbox: VecDeque<(Action, Then, Option<String>)>,
     pub(crate) pending_auth: Option<(String, Action)>,
 }
@@ -132,6 +133,7 @@ impl App {
             snapshot_at: Instant::now(),
             frozen_history: None,
             moving_rule: false,
+            recovery_prompted: false,
             outbox: VecDeque::new(),
             pending_auth: None,
         }
@@ -228,6 +230,18 @@ impl App {
             }
         }
         self.snap = s;
+    }
+    fn recover_capture_if_needed(&mut self) {
+        if self.snap.capture_recovery.is_empty() {
+            self.recovery_prompted = false;
+        } else if !self.recovery_prompted && self.busy.is_none() && self.modals.is_empty() {
+            self.recovery_prompted = true;
+            self.request_busy(
+                Action::RecoverCapture,
+                "Restoring network",
+                Box::new(notify),
+            );
+        }
     }
     fn observe_connections(&mut self, report: runtime::ConnectionReport) {
         self.history.observe(report, self.snap.connected);
@@ -515,6 +529,9 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
                 app.toast = None;
             }
         }
+        if app.demo.is_none() {
+            app.recover_capture_if_needed();
+        }
         term.draw(|f| draw(f, &app))?;
         if event::poll(Duration::from_millis(120))? {
             match event::read()? {
@@ -527,13 +544,23 @@ pub fn run(dir: PathBuf, demo: bool) -> Result<()> {
             leave()?;
             let result = if kind == "system" {
                 crate::system_proxy::helper::authorize(&dir)
+            } else if kind == "tun_recovery" {
+                runtime::tun::authorize_recovery(&dir)
             } else {
-                runtime::authorize_tun(&dir, &app.snap.core)
+                runtime::tun::authorize(&dir, &app.snap.core)
             };
             enter()?;
             term.clear()?;
             match result {
-                Ok(()) => app.request_busy(after, "Starting", Box::new(notify)),
+                Ok(()) => app.request_busy(
+                    after,
+                    if kind == "tun_recovery" {
+                        "Restoring network"
+                    } else {
+                        "Applying"
+                    },
+                    Box::new(notify),
+                ),
                 Err(e) => app.error(e.to_string()),
             }
         }

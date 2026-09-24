@@ -1,4 +1,5 @@
 //! Native documents are authoritative. Import metadata never rebuilds a document.
+pub mod defaults;
 pub mod links;
 pub mod resource;
 pub mod review;
@@ -30,7 +31,7 @@ pub struct ConnectionSetup {
     pub capture: String,
 }
 pub fn tun_template() -> Value {
-    json!({"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"stack":"mixed","dns_mode":"hijack"})
+    json!({"type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"strict_route":true,"stack":"mixed","dns_mode":"hijack"})
 }
 pub fn connection_setup_review(before: &Store, next: &Store) -> Result<String> {
     // This is a save preview, not a statement about an active core.
@@ -702,7 +703,7 @@ pub fn references(doc: &Value) -> Result<()> {
                 let members = v["outbounds"]
                     .as_array()
                     .context("Group members must be an array")?;
-                ensure!(!members.is_empty(), "Group {t} has no members");
+                ensure!(!members.is_empty(), "Group {t} has no members. Import nodes or choose group members before starting.");
                 for member in members {
                     let m = member
                         .as_str()

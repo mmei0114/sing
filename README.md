@@ -55,7 +55,7 @@ These steps build the latest source on `main`; tagged snapshots are available un
 
 1. **Get the core.** Press `:` → **Core**. Press `d` to fetch official releases, then `i` to open the download picker; choose a version with arrows and `Enter`. After downloading, `r` refreshes installed cores and `Enter` selects one. Compatibility is tested with **sing-box 1.14.0**, using its official gRPC API. The core is installed separately, not bundled.
 2. **Bring your nodes.** Press `Esc` to return, then `i` on Overview. Paste a subscription URL, node links or a local file path. Review the preview and choose **Save to Draft**.
-3. **Initialize if prompted.** On a fresh or older profile, press `s` and confirm the native configuration upgrade. This step saves a private backup and a draft; it does not start the core.
+3. **Review your defaults.** Fresh profiles already have an editable native draft: a `proxy` group, encrypted DNS through that group, and basic routing. No subscription is bundled and nothing starts automatically. Older profiles may still offer a backed-up native configuration upgrade.
 4. **Start.** Press `A`, review, then **Apply & Start**. The initial generated configuration includes a `proxy` group for your nodes; choose its live member on Overview or **Policies → Groups**. Press `m` to choose a routing mode.
 5. **Send traffic through it.** On a local Mac, `p` controls System Proxy for applications that honor OS proxy settings. Otherwise configure an app to use the listener in **Config → inbounds** (normally HTTP/SOCKS at `127.0.0.1:2080`). TUN is available with `t`, but changes host routing and needs administrator access.
 

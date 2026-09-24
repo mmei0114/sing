@@ -191,6 +191,39 @@ fn active_system_proxy_recovery_record_is_not_an_error() {
 }
 
 #[test]
+fn dns_recovery_uses_the_normal_interface_once_per_failure() {
+    let mut app = demo_app();
+    app.snap.connected = false;
+    app.snap.capture_recovery = "Previous network settings need to be restored".into();
+    app.recover_capture_if_needed();
+    app.recover_capture_if_needed();
+    assert_eq!(
+        app.outbox.len(),
+        1,
+        "do not repeatedly ask for authorization"
+    );
+    assert!(matches!(
+        app.outbox.front().unwrap().0,
+        Action::RecoverCapture
+    ));
+    let view = screen(&app, 110, 32);
+    assert!(view.contains("Network settings need attention"));
+    assert!(!view.contains("--restore-dns"));
+    app.outbox.clear();
+    chrome::start_stop(&mut app);
+    assert!(
+        matches!(app.outbox.front().unwrap().0, Action::Connect),
+        "Start resumes automatically after recovery"
+    );
+    app.outbox.clear();
+    app.snap.capture_recovery.clear();
+    app.recover_capture_if_needed();
+    app.snap.capture_recovery = "A later recovery".into();
+    app.recover_capture_if_needed();
+    assert_eq!(app.outbox.len(), 1);
+}
+
+#[test]
 fn activity_search_captures_letters_instead_of_toggling_core() {
     let mut app = demo_app();
     app.go(Tab::Activity);

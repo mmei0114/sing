@@ -22,6 +22,18 @@ fn ok(dir: &Path, action: &str, data: Value) -> Value {
     assert_eq!(r["ok"], true, "{action}: {r}");
     r
 }
+fn legacy_profile(dir: &Path) {
+    // These compatibility tests use legacy settings, not the first-run preset.
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&json!({
+            "schema":1, "secret":"isolated-legacy-fixture", "subscriptions":[],
+            "nodes":[], "selected":null, "settings":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
 struct Manager<'a>(&'a Path, Child);
 fn fake_http_node(label: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     fake_http_node_for(label, "media.example.invalid")
@@ -90,6 +102,7 @@ fn routing_modes_and_observed_connection_close() {
     let core = std::env::var("SING_TEST_CORE").expect("Set SING_TEST_CORE");
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
+    legacy_profile(dir);
     let child = Command::new(env!("CARGO_BIN_EXE_sing"))
         .args(["--daemon", "--data-dir"])
         .arg(dir)
@@ -348,6 +361,7 @@ fn groups_rules_preview_refresh_dns_and_native_selection() {
     let core = std::env::var("SING_TEST_CORE").expect("Set SING_TEST_CORE");
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
+    legacy_profile(dir);
     let child = Command::new(env!("CARGO_BIN_EXE_sing"))
         .args(["--daemon", "--data-dir"])
         .arg(dir)

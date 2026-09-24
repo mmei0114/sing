@@ -23,11 +23,13 @@ use std::{
 
 pub const CORE_VERSION: &str = "1.14.0";
 /// Bumped whenever the UI depends on new manager actions.
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 mod controls;
 mod cores;
 mod selection;
+pub mod tun;
 pub use cores::{CoreInfo, CoreReport};
+use tun::request as helper_request;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "action", content = "data", rename_all = "snake_case")]
 pub enum Action {
@@ -63,6 +65,7 @@ pub enum Action {
     Connections,
     CloseConnection(String),
     Diagnostics,
+    RecoverCapture,
     Import {
         source: String,
         name: String,
@@ -194,6 +197,8 @@ pub struct Snapshot {
     pub manager_protocol: u32,
     #[serde(default)]
     pub system_proxy: ProxyStatus,
+    #[serde(default)]
+    pub capture_recovery: String,
     #[serde(default)]
     pub connectivity: ProbeStatus,
     pub store: Store,
@@ -353,6 +358,7 @@ pub(crate) struct Manager {
     store: Store,
     child: Option<Child>,
     tun: bool,
+    tun_status_error: String,
     running: Option<Store>,
     pending: Option<PendingSubscriptions>,
     activity: Vec<String>,
@@ -404,9 +410,38 @@ impl Manager {
     }
     fn connected(&mut self) -> bool {
         if self.tun {
-            return helper_request(&self.dir, "status")
-                .map(|x| x == "running")
-                .unwrap_or(false);
+            return match helper_request(&self.dir, "status") {
+                Ok(status) if status == "running" => {
+                    self.tun_status_error.clear();
+                    true
+                }
+                Ok(status) if status == "stopped" => {
+                    self.tun = false;
+                    self.tun_status_error.clear();
+                    self.api_ready = false;
+                    self.connectivity = ProbeStatus::default();
+                    #[cfg(target_os = "macos")]
+                    self.log("TUN core exited; macOS DNS was restored");
+                    #[cfg(not(target_os = "macos"))]
+                    self.log("TUN core exited; inspect core.log for details");
+                    false
+                }
+                Ok(status) => {
+                    if self.tun_status_error != status {
+                        self.log(format!("Unexpected TUN helper status: {status}"));
+                        self.tun_status_error = status;
+                    }
+                    false
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if self.tun_status_error != message {
+                        self.log(format!("TUN helper: {message}"));
+                        self.tun_status_error = message;
+                    }
+                    false
+                }
+            };
         }
         if let Some(child) = &mut self.child {
             if let Ok(Some(status)) = child.try_wait() {
@@ -511,6 +546,13 @@ impl Manager {
             selection_recovery: self.selection_recovery.clone(),
             manager_protocol: PROTOCOL,
             system_proxy,
+            capture_recovery: if !self.tun_status_error.is_empty() {
+                self.tun_status_error.clone()
+            } else if !self.tun && tun::pending(&self.dir) {
+                "Previous network settings need to be restored".into()
+            } else {
+                String::new()
+            },
             connectivity: if connected {
                 self.connectivity.clone()
             } else {
@@ -951,16 +993,44 @@ impl Manager {
         }
         Ok(core)
     }
+    fn recover_capture(&mut self, after: Action) -> Result<Option<Reply>> {
+        if !tun::pending(&self.dir) {
+            if self.tun && !tun::available(&self.dir) {
+                self.tun = false;
+                self.api_ready = false;
+                self.tun_status_error.clear();
+            }
+            return Ok(None);
+        }
+        if self.tun && helper_request(&self.dir, "status").is_ok_and(|s| s == "running") {
+            return Ok(None);
+        }
+        if tun::available(&self.dir) {
+            helper_request(&self.dir, "stop")?;
+            self.tun = false;
+            self.tun_status_error.clear();
+            self.log("Previous network settings restored");
+            return Ok(None);
+        }
+        let mut reply = Reply::success(
+            "macOS needs administrator access to finish restoring your previous network settings.",
+        );
+        reply.needs_auth = true;
+        reply.auth_kind = "tun_recovery".into();
+        reply.after_auth = Some(after);
+        Ok(Some(reply))
+    }
     fn stop(&mut self) -> Result<()> {
         if self.dir.join(proxy_helper::MARKER).exists() {
             let restored = proxy_helper::restore(&self.dir)?;
             self.log(restored.detail);
         }
         self.lease.set(false);
-        if self.tun {
+        if self.tun || tun::pending(&self.dir) {
             helper_request(&self.dir, "stop")?;
             self.tun = false;
         }
+        self.tun_status_error.clear();
         if let Some(mut c) = self.child.take() {
             let _ = unsafe { libc::kill(c.id() as i32, libc::SIGTERM) };
             for _ in 0..30 {
@@ -997,11 +1067,12 @@ impl Manager {
             &serde_json::to_vec_pretty(&config::generate(store)?)?,
         )?;
         if native::uses_tun(store) {
+            // Include partial-start failures in the ordinary stop/rollback path.
+            self.tun = true;
             ensure!(
                 helper_request(&self.dir, "start")? == "running",
                 "TUN helper failed to start"
             );
-            self.tun = true;
         } else {
             self.child = Some(spawn_core(core, &self.dir)?);
         }
@@ -1036,6 +1107,9 @@ impl Manager {
         bail!("Core started but its native gRPC API did not become ready")
     }
     async fn connect(&mut self) -> Result<Reply> {
+        if let Some(reply) = self.recover_capture(Action::Connect)? {
+            return Ok(reply);
+        }
         ensure!(self.store.settings.mode!="system"||std::env::var_os("SSH_CONNECTION").is_none(),"System proxy takeover is disabled over SSH. Use Port mode; this controls the remote host.");
         let core = self.check_store(&self.store).await?;
         if self.store.settings.mode == "system"
@@ -1378,7 +1452,30 @@ impl Manager {
                     &self.store,
                     self.running.as_ref().filter(|_| connected),
                 ));
+                if cfg!(target_os = "macos") {
+                    let detail = if !self.tun_status_error.is_empty() {
+                        format!("Recovery pending: {}", self.tun_status_error)
+                    } else if self.tun && tun::pending(&self.dir) {
+                        "TUN active; original DNS settings saved for Stop".into()
+                    } else if tun::pending(&self.dir) {
+                        "Previous DNS recovery is pending; sing resumes it in the interface".into()
+                    } else {
+                        "No unfinished TUN DNS recovery".into()
+                    };
+                    reply
+                        .config
+                        .as_mut()
+                        .unwrap()
+                        .push_str(&format!("\n\nmacOS connection\n{detail}\n"));
+                }
                 Ok(reply)
+            }
+            Action::RecoverCapture => {
+                if let Some(reply) = self.recover_capture(Action::RecoverCapture)? {
+                    return Ok(reply);
+                }
+                self.tun_status_error.clear();
+                Ok(Reply::success("Network settings are ready"))
             }
             Action::SaveGroup(mut group) => {
                 group.name = model::clean(group.name.trim());
@@ -1726,6 +1823,9 @@ impl Manager {
                 Ok(r)
             }
             Action::Shutdown => {
+                if let Some(reply) = self.recover_capture(Action::Shutdown)? {
+                    return Ok(reply);
+                }
                 self.stop()?;
                 self.running = None;
                 let _ = helper_request(&self.dir, "exit");
@@ -1902,6 +2002,9 @@ impl Manager {
             Action::InstallCoreVersion(version) => self.install_core_version(version).await,
             Action::SelectCore(path) => self.select_core(path).await,
             Action::Disconnect => {
+                if let Some(reply) = self.recover_capture(Action::Disconnect)? {
+                    return Ok(reply);
+                }
                 self.stop()?;
                 self.running = None;
                 self.log("Disconnected by user");
@@ -2010,6 +2113,7 @@ pub fn daemon(dir: &Path) -> Result<()> {
         store,
         child: None,
         tun: false,
+        tun_status_error: String::new(),
         running: None,
         pending: None,
         activity: vec![],
@@ -2118,7 +2222,7 @@ pub fn daemon(dir: &Path) -> Result<()> {
             frame.push(b'\n');
             let _ = stream.write_all(&frame);
         }
-        if shutdown && reply.ok {
+        if shutdown && reply.ok && !reply.needs_auth {
             break;
         }
     }
@@ -2402,146 +2506,28 @@ pub(crate) async fn install_core(dir: &Path) -> Result<PathBuf> {
     bail!("Executable missing in the official archive")
 }
 
-fn helper_request(dir: &Path, action: &str) -> Result<String> {
-    let mut s = UnixStream::connect(dir.join("tun.sock")).context("TUN authorization required")?;
-    s.set_read_timeout(Some(Duration::from_secs(8)))?;
-    writeln!(s, "{action}")?;
-    let mut line = String::new();
-    BufReader::new(s).take(1024).read_line(&mut line)?;
-    ensure!(!line.starts_with("error"), "{}", line.trim());
-    Ok(line.trim().into())
-}
-
-/// Explicitly launched by sudo from the foreground TUI. Only fixed lifecycle commands.
-pub fn tun_helper(dir: &Path, core: &Path) -> Result<()> {
-    ensure!(
-        unsafe { libc::geteuid() } == 0,
-        "TUN helper must be explicitly authorized using sudo"
-    );
-    let meta = fs::symlink_metadata(dir)?;
-    ensure!(
-        meta.is_dir() && meta.mode() & 0o077 == 0,
-        "Data directory must be private"
-    );
-    ensure!(
-        core.is_absolute() && core.is_file(),
-        "Core must be an absolute executable path"
-    );
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .open(dir.join("tun.lock"))?;
-    lock.try_lock_exclusive()?;
-    let socket = dir.join("tun.sock");
-    if socket.exists() {
-        fs::remove_file(&socket)?;
-    }
-    let listener = UnixListener::bind(&socket)?;
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
-    let cpath = std::ffi::CString::new(socket.as_os_str().as_encoded_bytes())?;
-    ensure!(
-        unsafe { libc::chown(cpath.as_ptr(), meta.uid(), meta.gid()) } == 0,
-        "Cannot set helper socket owner"
-    );
-    let mut child: Option<Child> = None;
-    for stream in listener.incoming() {
-        let Ok(mut s) = stream else { continue };
-        s.set_read_timeout(Some(Duration::from_secs(3)))?;
-        let mut action = String::new();
-        if BufReader::new(&s).take(64).read_line(&mut action).is_err() {
-            continue;
-        }
-        if let Some(c) = &mut child {
-            if c.try_wait()?.is_some() {
-                child = None;
-            }
-        }
-        let reply: Result<String> = (|| match action.trim() {
-            "start" => {
-                ensure!(child.is_none(), "Core already running");
-                let config: serde_json::Value =
-                    serde_json::from_slice(&fs::read(dir.join("runtime.json"))?)?;
-                ensure!(
-                    config["inbounds"]
-                        .as_array()
-                        .is_some_and(|a| a.iter().any(|i| i["type"] == "tun")),
-                    "No TUN configured"
-                );
-                child = Some(spawn_core(core, dir)?);
-                Ok("running".into())
-            }
-            "stop" | "exit" => {
-                if let Some(mut c) = child.take() {
-                    unsafe {
-                        libc::kill(c.id() as i32, libc::SIGTERM);
-                    };
-                    for _ in 0..40 {
-                        if c.try_wait()?.is_some() {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    if c.try_wait()?.is_none() {
-                        c.kill()?;
-                        c.wait()?;
-                    }
-                }
-                Ok("stopped".into())
-            }
-            "status" => Ok(if child.is_some() {
-                "running"
-            } else {
-                "stopped"
-            }
-            .into()),
-            _ => bail!("Unknown helper command"),
-        })();
-        let _ = writeln!(s, "{}", reply.unwrap_or_else(|e| format!("error: {e}")));
-        if action.trim() == "exit" {
-            break;
-        }
-    }
-    if let Some(mut c) = child {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-    Ok(())
-}
-
-pub fn authorize_tun(dir: &Path, core: &str) -> Result<()> {
-    // Create the log as the user before starting the root helper.
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(dir.join("core.log"))?;
-    let result = Command::new("sudo")
-        .arg("-b")
-        .arg(std::env::current_exe()?)
-        .arg("--data-dir")
-        .arg(dir)
-        .arg("--tun-helper")
-        .arg("--core")
-        .arg(fs::canonicalize(core)?)
-        .status()?;
-    ensure!(
-        result.success(),
-        "Administrator authorization cancelled or failed"
-    );
-    for _ in 0..30 {
-        if helper_request(dir, "status").is_ok() {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    bail!("TUN helper did not become ready")
-}
-
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unfinished_dns_recovery_uses_normal_authorization_without_a_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = draft_manager(dir.path());
+        fs::write(dir.path().join("tun.pending.json"), "{}").unwrap();
+        let reply = manager.handle(Action::RecoverCapture).await.unwrap();
+        assert!(reply.needs_auth);
+        assert_eq!(reply.auth_kind, "tun_recovery");
+        assert!(matches!(reply.after_auth, Some(Action::RecoverCapture)));
+        assert!(!manager.snapshot().await.capture_recovery.is_empty());
+        fs::remove_file(dir.path().join("tun.pending.json")).unwrap();
+        assert!(
+            !manager
+                .handle(Action::RecoverCapture)
+                .await
+                .unwrap()
+                .needs_auth
+        );
+    }
     #[test]
     fn traffic_rate_needs_two_valid_samples_and_resets_after_counter_restart() {
         let base = super::api::Status {
@@ -2698,6 +2684,7 @@ mod tests {
             store,
             child: None,
             tun: false,
+            tun_status_error: String::new(),
             running: None,
             pending: None,
             activity: vec![],
@@ -3197,6 +3184,7 @@ mod tests {
             store,
             child: None,
             tun: false,
+            tun_status_error: String::new(),
             running: None,
             pending: None,
             activity: vec![],

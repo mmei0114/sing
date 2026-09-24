@@ -140,6 +140,7 @@ impl Demo {
             selection_recovery: String::new(),
             manager_protocol: crate::runtime::PROTOCOL,
             system_proxy: Default::default(),
+            capture_recovery: String::new(),
             connectivity: Default::default(),
             running_tun: false,
             dirty: self.applied_native != self.store.native,
@@ -418,6 +419,7 @@ impl Demo {
                 r.config = Some(config::diagnostics(&self.store, None));
                 r
             }
+            Action::RecoverCapture => reply(true, "Network settings are ready"),
             _ => reply(true, "Demo: this action needs a real sing manager"),
         })
     }

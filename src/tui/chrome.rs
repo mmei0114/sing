@@ -369,6 +369,17 @@ pub fn controls(f: &mut Frame, area: Rect, app: &App) {
 
 // ---- actions --------------------------------------------------------------------------
 pub fn start_stop(app: &mut App) {
+    if !app.snap.capture_recovery.is_empty() {
+        let action = if app.snap.connected {
+            Action::Disconnect
+        } else if app.snap.core.is_empty() {
+            Action::RecoverCapture
+        } else {
+            Action::Connect
+        };
+        app.request_busy(action, "Restoring network", Box::new(notify));
+        return;
+    }
     if app.snap.connected {
         app.request_busy(Action::Disconnect, "Stopping", Box::new(notify));
         return;

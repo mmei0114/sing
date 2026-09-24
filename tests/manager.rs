@@ -73,10 +73,10 @@ fn manager_accepts_fragmented_request_frames() {
     }
     // Activity's `f` saves a native route edit before offering Apply. Exercise
     // that sequence in the isolated profile; never start a core for this test.
-    let migration = rpc(dir.path(), json!({"action":"review_migration"}));
-    assert_eq!(migration["ok"], true, "{migration}");
-    let adopted = rpc(dir.path(), migration["confirm"].clone());
-    assert_eq!(adopted["ok"], true, "{adopted}");
+    assert_eq!(
+        rpc(dir.path(), json!({"action":"snapshot"}))["snapshot"]["store"]["schema"],
+        2
+    );
     let read_route = json!({"action":"read_native","data":"/route"});
     let initial = rpc(dir.path(), read_route.clone());
     assert_eq!(initial["ok"], true);

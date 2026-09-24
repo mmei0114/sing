@@ -79,7 +79,9 @@ fn subscription_setup_save_then_explicit_start() {
     let review = ok(dir, "review_connection_setup", setup);
     assert!(!review.to_string().contains("fixture-private"));
     assert!(!dir.join("pre-native-state.json").exists());
-    assert!(ok(dir, "snapshot", Value::Null)["snapshot"]["store"]["native"].is_null());
+    let draft = ok(dir, "snapshot", Value::Null)["snapshot"]["store"]["native"].clone();
+    assert_eq!(draft["dns"]["final"], "dns-proxy");
+    assert_eq!(draft["dns"]["servers"][0]["detour"], "proxy");
     let ready = ok(
         dir,
         "save_connection_setup",
@@ -89,7 +91,7 @@ fn subscription_setup_save_then_explicit_start() {
         ok(dir, "snapshot", Value::Null)["snapshot"]["connected"],
         false
     );
-    assert!(dir.join("pre-native-state.json").exists());
+    assert!(!dir.join("pre-native-state.json").exists());
     assert_eq!(ready["confirm"]["action"], "apply_native");
     ok(dir, "apply_native", ready["confirm"]["data"].clone());
     let snapshot = ok(dir, "snapshot", Value::Null)["snapshot"].clone();
@@ -98,6 +100,23 @@ fn subscription_setup_save_then_explicit_start() {
     assert_eq!(snapshot["running_tun"], false);
     assert_eq!(snapshot["running_settings"]["mode"], "port");
     ok(dir, "disconnect", Value::Null);
+    // Validate the actual TUN template with the core, without running TUN.
+    let revision = ok(dir, "read_native", json!(""))["edit"]["revision"].clone();
+    ok(dir, "set_tun", json!({"enabled":true, "revision":revision}));
+    let draft = ok(dir, "read_native", json!(""))["edit"]["value"].clone();
+    let tun = draft["inbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "tun")
+        .unwrap();
+    assert_eq!(tun["strict_route"], true);
+    assert_eq!(tun["dns_mode"], "hijack");
+    ok(dir, "check", Value::Null);
+    assert_eq!(
+        ok(dir, "snapshot", Value::Null)["snapshot"]["connected"],
+        false
+    );
 }
 #[test]
 #[ignore = "Real core + loopback-only manager; no public endpoints or system changes"]
@@ -105,6 +124,16 @@ fn native_migration_edit_apply_conflict_and_rollback() {
     let core = std::env::var("SING_TEST_CORE").expect("Set SING_TEST_CORE");
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
+    // This test deliberately exercises an existing pre-native profile.
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&json!({
+            "schema":1, "secret":"isolated-legacy-fixture", "subscriptions":[],
+            "nodes":[], "selected":null, "settings":{}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_sing"))
         .args(["--daemon", "--data-dir"])
         .arg(dir)
@@ -148,7 +177,7 @@ fn native_migration_edit_apply_conflict_and_rollback() {
     assert_eq!(backup["schema"], 1);
     assert!(backup["native"].is_null());
     let snap = ok(dir, "snapshot", Value::Null);
-    assert_eq!(snap["snapshot"]["manager_protocol"], 10);
+    assert_eq!(snap["snapshot"]["manager_protocol"], 11);
     assert!(!snap.to_string().contains("test-secret"));
     assert_eq!(snap["snapshot"]["connected"], false);
     let mut edit = ok(dir, "read_native", json!(""))["edit"].clone();

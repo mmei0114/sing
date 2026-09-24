@@ -61,6 +61,7 @@ extern "C" {
     fn SCNetworkSetCopyCurrent(p: Ref) -> Ref;
     fn SCNetworkSetCopyServices(s: Ref) -> Ref;
     fn SCNetworkServiceGetEnabled(s: Ref) -> u8;
+    fn SCNetworkServiceCopy(p: Ref, id: Ref) -> Ref;
     fn SCNetworkServiceGetName(s: Ref) -> Ref;
     fn SCNetworkServiceGetServiceID(s: Ref) -> Ref;
     fn SCNetworkServiceGetInterface(s: Ref) -> Ref;
@@ -227,6 +228,89 @@ impl MacBackend {
         );
         string(&format!("/NetworkServices/{id}/Proxies"))
     }
+    fn dns_path(id: &str) -> Result<Owned> {
+        ensure!(
+            !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+            "Invalid network service identifier"
+        );
+        string(&format!("/NetworkServices/{id}/DNS"))
+    }
+    fn read_dns_locked(&self, id: &str) -> Result<Option<Dict>> {
+        let path = Self::dns_path(id)?;
+        let service = string(&format!("/NetworkServices/{id}"))?;
+        if unsafe { SCPreferencesPathGetValue(self.prefs.0, service.0) }.is_null() {
+            let code = unsafe { SCError() };
+            if code == 1004 {
+                return Err(super::RemovedService.into());
+            }
+            bail!("Cannot read DNS network service (code {code})");
+        }
+        let raw = unsafe { SCPreferencesPathGetValue(self.prefs.0, path.0) };
+        if raw.is_null() {
+            ensure!(unsafe { SCError() } == 1004, "Cannot read DNS preferences");
+            return Ok(None);
+        }
+        let Plist::Dict(d) = decode(raw, 0)? else {
+            bail!("DNS preference is not a dictionary")
+        };
+        Ok(Some(d))
+    }
+    pub fn dns_services(&mut self) -> Result<Vec<Service>> {
+        let mut services = self.services()?;
+        for service in &mut services {
+            service.proxies = self.read_dns(&service.id)?;
+        }
+        Ok(services)
+    }
+    pub fn read_dns(&mut self, id: &str) -> Result<Option<Dict>> {
+        unsafe { SCPreferencesSynchronize(self.prefs.0) };
+        self.read_dns_locked(id)
+    }
+    pub fn dns_service_name(&self, id: &str) -> Result<String> {
+        let id = string(id)?;
+        let service = Owned::new(unsafe { SCNetworkServiceCopy(self.prefs.0, id.0) })?;
+        read_string(unsafe { SCNetworkServiceGetName(service.0) })
+    }
+    pub fn transact_dns(&mut self, changes: &[Change]) -> Result<()> {
+        ensure!(
+            unsafe { libc::geteuid() } == 0,
+            "Administrator authorization is required"
+        );
+        unsafe { SCPreferencesSynchronize(self.prefs.0) };
+        ensure!(
+            unsafe { SCPreferencesLock(self.prefs.0, 0) } != 0,
+            "macOS network settings are busy (code {})",
+            unsafe { SCError() }
+        );
+        let _lock = Lock(self.prefs.0);
+        unsafe { SCPreferencesSynchronize(self.prefs.0) };
+        for c in changes {
+            ensure!(
+                self.read_dns_locked(&c.id)? == c.expected,
+                "DNS settings changed concurrently; refusing to overwrite them"
+            );
+        }
+        for c in changes {
+            let path = Self::dns_path(&c.id)?;
+            let ok = if let Some(d) = &c.replacement {
+                let value = encode(&Plist::Dict(d.clone()))?;
+                unsafe { SCPreferencesPathSetValue(self.prefs.0, path.0, value.0) }
+            } else {
+                unsafe { SCPreferencesPathRemoveValue(self.prefs.0, path.0) }
+            };
+            ensure!(ok != 0, "Could not stage DNS settings (code {})", unsafe {
+                SCError()
+            });
+        }
+        ensure!(
+            unsafe { SCPreferencesCommitChanges(self.prefs.0) } != 0,
+            "Could not commit DNS settings (code {})",
+            unsafe { SCError() }
+        );
+        ensure!(unsafe { SCPreferencesApplyChanges(self.prefs.0) } != 0,
+            "DNS preferences committed but macOS failed to apply them (code {}); recovery is required", unsafe { SCError() });
+        Ok(())
+    }
     fn read_locked(&self, id: &str) -> Result<Option<Dict>> {
         let path = Self::path(id)?;
         let service = string(&format!("/NetworkServices/{id}"))?;
@@ -389,5 +473,16 @@ mod tests {
             }
         }
         let _ = effective(2080).unwrap();
+    }
+    #[test]
+    #[ignore = "Read-only inventory of macOS DNS preference dictionaries"]
+    fn read_only_dns_inventory() {
+        let mut backend = MacBackend::new().unwrap();
+        let services = backend.dns_services().unwrap();
+        assert!(!services.is_empty());
+        for service in services {
+            assert!(!service.id.is_empty());
+            assert!(!backend.dns_service_name(&service.id).unwrap().is_empty());
+        }
     }
 }
